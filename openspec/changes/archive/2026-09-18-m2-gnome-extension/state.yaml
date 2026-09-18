@@ -116,26 +116,47 @@ phases:
         locally; St.Settings color-scheme with the St.SystemColorScheme enum was verified in
         /usr/lib64/gnome-shell/St-16.typelib, so the class is chosen explicitly in JS.
   verify:
-    state: pending
-    artifact: null
-    blocked_on: shell-side-evidence
-    blocked_note: >
-      Six tasks (2.5, 5.5, 6.2, 6.3, 6.4, 6.5) need a GNOME Shell that has scanned the
-      installed extension. The session is Wayland (confirmed: loginctl Type=wayland,
-      WAYLAND_DISPLAY=wayland-0; DISPLAY=:0 is XWayland, not an X11 session), so the Shell
-      cannot re-scan without a logout/login. The user declined to log out on 2026-09-18 and
-      chose to verify later. Nothing decays: the daemon, unit and extension are installed and
-      cadenced is enabled and running.
-    resume_steps:
-      - "After any logout/login: gnome-extensions enable cadence@ian.dev"
-      - "cadence start, then work through tasks 6.2-6.5"
-      - "Alternative without logging out: make -C packaging nested (own D-Bus session, needs
-         its own cadenced inside it; cannot cover the suspend check 6.3)"
-      - "Amber check 6.4 needs either a 48-minute wait or a temporarily lowered
-         timer.focus_minutes in ~/.config/cadence/config.toml"
+    state: done
+    artifact: openspec/changes/m2-gnome-extension/verify-report.md
+    verdict: pass
+    requirements: "8/8"
+    scenarios: "16/16"
+    blockers: 0
+    critical_findings: 0
+    warnings: 3
+    verified_on: "GNOME Shell 48.8, Wayland, 2026-09-18, first ever load of the extension"
+    warning_notes:
+      - >-
+        Success criterion 8's literal "offset zero" stays unachievable: PhaseEndsAt is a whole-second
+        unix value, so a client sits ~0.17s below truth. Resolution, not drift.
+      - >-
+        Light-theme amber (.cadence-warning-light) is implemented and installed but was only
+        exercised in dark mode. Untested colour rather than verified colour.
+      - >-
+        Suspend and leak checks ran against a 3-minute test config rather than the 50-minute
+        default. The logic is duration-independent but the default timings were not observed.
+    findings_raised:
+      - F3
+      - F4
   archive:
-    state: pending
-    artifact: null
+    state: done
+    artifact: openspec/changes/archive/2026-09-18-m2-gnome-extension/archive-report.md
+    archived: 2026-09-18
+    specs_merged:
+      - target: openspec/specs/panel-indicator/spec.md
+        capability: panel-indicator
+        delta: NEW
+        destructive: false
+        requirements: 8
+        scenarios: 16
+        note: >-
+          New capability, copied whole. No existing spec was modified or removed. The four daemon
+          capabilities are untouched — M2 shipped without a single change under daemon/, verified by
+          git show --stat cf57273 -- daemon/ returning empty. A stale note in the suspend scenario
+          saying it "cannot pass until that is fixed" was corrected before merge, since
+          fix-suspend-deadline-republish resolved it the same day.
+    carried_forward: [F3, F4]
+    resolved_during: [F1]
 
 invariants:
   - id: I1

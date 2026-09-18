@@ -74,8 +74,8 @@ property. `RemainingSeconds` is republished only on transitions, so between tran
 stale snapshot and a correct client will appear to diverge from it by exactly the elapsed time.
 
 This scenario depends on the daemon republishing `PhaseEndsAt` whenever it changes the effective
-deadline. A suspend shorter than the idle-credit threshold does not currently do so, so this
-scenario cannot pass until that is fixed.
+deadline, which `daemon-control` "Change Notification" requires. Verified 2026-09-18 on a real
+suspend: sub-second offset, stable across a phase transition.
 
 #### Scenario: Paused freezes on RemainingSeconds
 
