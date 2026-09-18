@@ -1,0 +1,7 @@
+{
+  "uuid": "cadence@ian.dev",
+  "name": "Cadence",
+  "description": "Panel indicator for the cadence stand-up timer daemon. Shows the remaining time in the current focus or break phase and warns two minutes before a break is due.",
+  "shell-version": ["48"],
+  "url": "https://github.com/ian/cadence"
+}

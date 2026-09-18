@@ -1,0 +1,24 @@
+/* The panel background differs per theme (#000000 dark, #fafafb light), so one
+ * amber cannot stay legible across both. GNOME 48 ships no semantic warning
+ * token — the only St custom properties available are -st-accent-color,
+ * -st-accent-fg-color, -st-hfade-offset, -st-icon-style and -st-vfade-offset —
+ * and the accent is the user's own choice, not a warning. Hence two local
+ * classes, selected in JS from St.Settings.color-scheme. */
+
+.cadence-label {
+    margin-left: 0.4em;
+}
+
+.cadence-dimmed {
+    opacity: 0.5;
+}
+
+.cadence-warning-dark {
+    color: #ffb454;
+    font-weight: bold;
+}
+
+.cadence-warning-light {
+    color: #8f5300;
+    font-weight: bold;
+}

@@ -1,0 +1,317 @@
+change: m2-gnome-extension
+project: cadence
+created: 2026-09-18
+artifact_store: openspec
+execution_mode: interactive
+delivery_strategy: single-pr
+chain_strategy: null
+delivery_note: >
+  User selected Single PR at the SDD session preflight on 2026-09-18. If the tasks
+  forecast exceeds the 400-line review budget, the Review Workload Guard must stop
+  and require a recorded size:exception before apply — it must not split silently.
+  Commit/push remain separate human decisions and are not performed by any phase.
+
+summary: >
+  M2 — GNOME Shell 48 extension for cadence: panel indicator reflecting daemon
+  session state over D-Bus, local countdown derived from PhaseEndsAt, and an amber
+  warning state at T-2min during focus. Consumer-only; no daemon changes.
+
+phases:
+  explore:
+    state: done
+    artifact: openspec/changes/m2-gnome-extension/exploration.md
+  research:
+    state: not-selected
+    artifact: null
+    note: >
+      GNOME 48 / GJS API evidence was gathered during exploration with URL citations
+      (gjs.guide extension anatomy, ESM upgrade guide, review guidelines, Gio D-Bus
+      guide, debugging guide). Three details are flagged unconfirmed in exploration.md
+      and must be re-checked at design: the -st-accent-color style property, the exact
+      journalctl invocation for Shell logs, and whether a standard warning style class
+      exists. Select a research lane if those need auditable sourcing.
+  proposal:
+    state: done
+    artifact: openspec/changes/m2-gnome-extension/proposal.md
+    capabilities_new: [panel-indicator]
+    capabilities_modified: []
+    revision: 2
+    revision_note: >
+      Revision 2 (2026-09-18) promoted the two-sources-of-truth paragraph from Approach
+      prose into binding Invariant I1, added success criteria 7-8 that test it under a
+      stopped daemon and across suspend, and added the corresponding risk row. No scope
+      change — the intent was already present, it was just not enforceable downstream.
+
+  specs:
+    state: done
+    artifact: openspec/changes/m2-gnome-extension/specs/
+    files:
+      - specs/panel-indicator/spec.md
+    requirements: 8
+    scenarios: 16
+    word_count: 1181
+    encodes_invariants: [I1]
+    note: >
+      I1 is encoded as the "State Authority" requirement plus the "Countdown Derivation"
+      requirement. The two scenarios that prove it are "Countdown reaches zero without a
+      daemon signal" (the tick must not conclude a transition) and "Display self-corrects
+      after suspend" (the display must be recomputed from PhaseEndsAt, never decremented).
+  design:
+    state: done
+    artifact: openspec/changes/m2-gnome-extension/design.md
+    decisions: 7
+    threat_matrix: not-applicable
+    word_count: 1468
+    enforces_invariants: [I1]
+    note: >
+      Decision 1 enforces I1 structurally rather than by discipline: rendering is a pure
+      function render(state, now) that holds no countdown field between calls, so a
+      decrementing local counter is unrepresentable rather than merely discouraged. It
+      also makes the countdown the one genuinely unit-testable piece of the extension.
+  tasks:
+    state: done
+    artifact: openspec/changes/m2-gnome-extension/tasks.md
+    phases: 6
+    task_count: 29
+    word_count: 986
+    review_forecast:
+      estimated_changed_lines: "340-390"
+      budget_risk: Medium
+      chained_prs_recommended: false
+      chain_strategy: null
+      decision_needed_before_apply: false
+      guard_note: >
+        The estimate sits inside the 400-line budget but close enough to cross it. Under
+        single-pr the Review Workload Guard MUST stop before apply and require a recorded
+        size:exception if the implementation exceeds 400 changed lines — a silent split is
+        not permitted. Task 6.1 (optional pure-logic test harness, ~60 lines) is the
+        designated drop-first item, being the only task not required by a spec requirement.
+  apply:
+    state: done
+    artifact: openspec/changes/m2-gnome-extension/apply-progress.md
+    tasks_complete: 24
+    tasks_total: 30
+    tasks_pending_note: >
+      The six open tasks (2.5, 5.5, 6.2, 6.3, 6.4, 6.5) are all Shell-side and cannot be
+      completed without a Wayland logout/login: the running GNOME Shell scanned extensions
+      at session start and cannot reload in place. Every task completable without a session
+      restart is done. Task 6.7 was added to record the budget ruling.
+    bookkeeping_note: >
+      Checkboxes in tasks.md were initially left unchecked while completion was recorded only
+      in apply-progress.md. Native sdd-status reads tasks.md, so it correctly reported 0/29
+      and held verify blocked. Corrected on 2026-09-18; status now reports 24/30.
+    test_results: "17/17 render checks pass (gjs); daemon go test ./... passes unchanged"
+    changed_lines: 522
+    ledger_changed_lines: 1548
+    runtime_attempt: >
+      passed with changed_line_budget_exceeded=true; maintainer accepted size:exception and
+      reset the objective on 2026-09-18 (request rst-m2-20260918-01, actor "ian (maintainer)").
+      Attempt 1 is preserved in the ledger history; lifetime_changed_lines 1548.
+    size_exception: accepted
+    deviations:
+      - Pure logic split into extension/render.js because importing extension.js outside the
+        Shell fails on resource:///org/gnome/shell/extensions/extension.js. Makes design
+        Decision 1's testability claim actually true rather than aspirational.
+      - One stylesheet.css with two classes instead of stylesheet-dark.css/stylesheet-light.css.
+        The window-list precedent is real but its selection mechanism was not confirmable
+        locally; St.Settings color-scheme with the St.SystemColorScheme enum was verified in
+        /usr/lib64/gnome-shell/St-16.typelib, so the class is chosen explicitly in JS.
+  verify:
+    state: pending
+    artifact: null
+    blocked_on: shell-side-evidence
+    blocked_note: >
+      Six tasks (2.5, 5.5, 6.2, 6.3, 6.4, 6.5) need a GNOME Shell that has scanned the
+      installed extension. The session is Wayland (confirmed: loginctl Type=wayland,
+      WAYLAND_DISPLAY=wayland-0; DISPLAY=:0 is XWayland, not an X11 session), so the Shell
+      cannot re-scan without a logout/login. The user declined to log out on 2026-09-18 and
+      chose to verify later. Nothing decays: the daemon, unit and extension are installed and
+      cadenced is enabled and running.
+    resume_steps:
+      - "After any logout/login: gnome-extensions enable cadence@ian.dev"
+      - "cadence start, then work through tasks 6.2-6.5"
+      - "Alternative without logging out: make -C packaging nested (own D-Bus session, needs
+         its own cadenced inside it; cannot cover the suspend check 6.3)"
+      - "Amber check 6.4 needs either a 48-minute wait or a temporarily lowered
+         timer.focus_minutes in ~/.config/cadence/config.toml"
+  archive:
+    state: pending
+    artifact: null
+
+invariants:
+  - id: I1
+    name: The daemon decides, the tick only renders
+    statement: >
+      D-Bus properties are authoritative for state (phase, paused, session existence);
+      the local 1s tick is authoritative for presentation only. The tick MUST NOT decide
+      or infer a transition, MUST NOT flip focus to break when its own countdown reaches
+      zero, MUST NOT clear SessionActive, and MUST NOT write any daemon-owned state. At
+      zero it renders 00:00 and waits.
+    rationale: >
+      A tick allowed to conclude anything becomes a second timer, and two timers drift.
+      The daemon's elapsed-in-phase survives suspend by design
+      (daemon/internal/session/state.go:46-50); a client-side countdown does not.
+      Recomputing the display from the absolute PhaseEndsAt every tick is self-correcting
+      across missed signals, suspend, and clock jumps.
+    binds: [specs, design, verify]
+    encoded_by:
+      - spec requirement "State Authority"
+      - spec requirement "Countdown Derivation"
+      - design Decision 1 (render is a pure function of state and now)
+    tested_by:
+      - success criterion 7 (stopped daemon)
+      - success criterion 8 (suspend)
+
+product_decisions: confirmed
+
+resolved_product_decisions:
+  - id: P1
+    question: >
+      What does the panel indicator show when the daemon is not running, or when it is
+      running but no session is active?
+    raised_by: exploration Decision 2, Risks
+    resolved: 2026-09-18
+    decision: dimmed-icon
+    answer: >
+      The indicator is always present in the panel. When the daemon is absent or no
+      session is active it renders a dimmed icon with no countdown label. When a session
+      is active it renders icon plus MM:SS. At T-2min in focus the label and icon take
+      the amber style class.
+    rationale: >
+      A hidden indicator makes a dead daemon indistinguishable from a deliberate idle
+      state — silent failure in exactly the component whose milestone goal is proving the
+      two halves talk. A dimmed icon keeps a predictable panel position and is itself the
+      liveness signal.
+
+resolved_technical_decisions:
+  - id: D1
+    question: Where the T-2min amber threshold lives
+    resolved: 2026-09-18
+    decision: hardcoded-120s
+    answer: >
+      A named constant in the extension. No warning threshold exists in config.toml, and
+      the daemon has no channel to hand a preference to the extension other than a new
+      D-Bus property. M6 (config hot reload) is the milestone that earns the right to
+      make it tunable.
+  - id: D2
+    question: The extension uuid
+    resolved: 2026-09-18
+    decision: cadence@ian.dev
+    answer: >
+      Durable across packaging and the install path, exactly as dev.ian.Cadence was fixed
+      in M1. Install path is ~/.local/share/gnome-shell/extensions/cadence@ian.dev/.
+  - id: D3
+    question: Install path shape for the extension and the cadenced binary
+    resolved: 2026-09-18
+    decision: makefile
+    answer: >
+      A Makefile in packaging/. One target builds cadenced into ~/.local/bin, installs the
+      extension into ~/.local/share/gnome-shell/extensions/cadence@ian.dev/, and installs
+      the existing systemd user unit. It will be run repeatedly during the Wayland dev
+      loop, so it is automation, not documentation.
+
+  - id: D4
+    question: Amber styling token
+    resolved: 2026-09-18
+    decision: local-class-two-stylesheets
+    answer: >
+      Define a local .cadence-warning class and ship it twice, as stylesheet-dark.css and
+      stylesheet-light.css. Settled at design by extracting GNOME 48.8's own shipped theme
+      rather than by documentation.
+    evidence: >
+      gresource extract of /usr/share/gnome-shell/gnome-shell-theme.gresource shows the
+      complete set of St custom properties available to an extension is exactly five:
+      -st-accent-color, -st-accent-fg-color, -st-hfade-offset, -st-icon-style,
+      -st-vfade-offset. Searching both gnome-shell-dark.css and gnome-shell-light.css for
+      .warning, .error, .destructive, .success returns zero matches — there is no warning
+      token to inherit. -st-accent-color is the user's accent, not a semantic warning, and
+      would make the warning state indistinguishable from ordinary chrome (and meaningless
+      if the user's accent is itself amber). Two stylesheets are required because #panel
+      background differs by theme: #000000 dark, #fafafb light (line 1776 of each). The
+      two-stylesheet mechanism is GNOME's own precedent — the shipped
+      window-list@gnome-shell-extensions.gcampax.github.com extension, also
+      shell-version ["48"], ships stylesheet-dark.css and stylesheet-light.css side by side.
+
+open_technical_decisions: []
+
+verified_facts:
+  gnome_shell: 48.8
+  session_type: wayland
+  bus_name: dev.ian.Cadence
+  object_path: /dev/ian/Cadence
+  interface: dev.ian.Cadence1
+  methods: [StartSession, StopSession, Pause, Resume, SkipBreak]
+  properties: [SessionActive, Phase, PhaseEndsAt, RemainingSeconds, Paused, Tier]
+  custom_signals: none
+  daemon_builds: true
+  daemon_installed: false
+  daemon_on_session_bus: false
+  git_head: bec60bc
+  strict_tdd: false
+
+risks:
+  - Verification requires cadenced installed and running; it is neither today.
+  - Wayland cannot restart the Shell in place; dev loop is logout/login or a nested
+    session, and the nested instance is not fully isolated from the host.
+  - No automated test harness exists for GNOME Shell extensions; the extension half is
+    verified manually. strict_tdd stays false and M2 does not change it.
+  - Leaks in disable() (1s GLib source, D-Bus proxy, signal handlers) are the likeliest
+    real defect and are explicit review-guideline violations.
+  - Paused publishes PhaseEndsAt as 0; a naive countdown renders a negative timer.
+  - >-
+    Amber must be derived client-side: specs/daemon-control forbids per-second traffic,
+    so no daemon signal for T-2min exists or will be added.
+
+notes:
+  - SDD sub-agent dispatch is refused in this runtime (Claude Code hooks expose no
+    authenticated caller provenance). All phases run inline, as in M1.
+  - M2 is consumer-only. The four merged daemon specs are unchanged; if M2 turns out to
+    need a daemon change, that is a finding to surface, not a plan to execute.
+
+findings:
+  - id: F1
+    title: Daemon does not republish PhaseEndsAt after a short suspend
+    discovered: 2026-09-18
+    discovered_by: task 6.3 (I1 suspend check)
+    severity: high
+    owner: daemon
+    status: open
+    summary: >-
+      applySuspend (daemon/internal/session/machine.go:123-139) returns EffectPersist with no
+      EffectNotify on the short-suspend path. The daemon correctly declines to charge a suspend
+      shorter than the idle-credit threshold to the current phase (M1 decision P1), which moves the
+      effective deadline forward, but never republishes PhaseEndsAt. Every client therefore keeps
+      counting to a stale deadline until some later transition happens to republish it.
+    evidence: >-
+      systemd-logind recorded a 9-second suspend (15:03:57 to 15:04:06). Afterwards the value the
+      extension renders (PhaseEndsAt minus now) sat a constant 3 seconds ahead of the daemon's
+      elapsed-derived remaining across three samples taken 20 seconds apart. A constant offset, not
+      converging drift. The long-suspend path (creditBreak) does emit EffectNotify; only the short
+      path omits it.
+    impact: >-
+      The error is bounded by the idle-credit threshold, so a suspend just under 10 minutes can leave
+      the panel roughly nine minutes wrong about when to stand up.
+    not_an_extension_bug: >-
+      The extension does exactly what invariant I1 and the panel-indicator spec require. M2 stays
+      consumer-only per its proposal's Out of Scope clause, which states that a needed daemon change
+      is a finding to surface rather than work to absorb.
+    proposed_fix: >-
+      Add EffectNotify to the short-suspend return in applySuspend so PhaseEndsAt is republished on
+      resume. A suspend is a genuine transition, so this does not conflict with the daemon-control
+      requirement forbidding per-second traffic.
+    blocks: [task 6.3, success criterion 8]
+
+corrections:
+  - id: C1
+    date: 2026-09-18
+    what: Success criterion 8 and the panel-indicator spec scenario "Display self-corrects after suspend"
+    was_wrong: >-
+      Both instructed comparing the rendered countdown against the published RemainingSeconds
+      property. RemainingSeconds is republished only on transitions, so between transitions it is a
+      stale snapshot; a correct implementation appears to diverge from it by exactly the time elapsed
+      since the last transition. Observed 200 seconds of false divergence shortly after a daemon
+      restart.
+    now: >-
+      Both compare against the daemon's elapsed-derived remaining, read from
+      ~/.local/state/cadence/session.json, sampled repeatedly to distinguish a constant offset from
+      measurement noise.
