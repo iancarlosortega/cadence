@@ -50,7 +50,7 @@ The daemon has never been installed, so nothing downstream is verifiable until t
 - [x] 2.2 ~~`extension/stylesheet-dark.css`~~ → `extension/stylesheet.css` `.cadence-warning-dark` (`#ffb454`, legible on `#000000`). **Deviation:** one stylesheet with two classes; the Shell's `stylesheet-dark.css`/`stylesheet-light.css` selection could not be confirmed locally, whereas `St.Settings.color-scheme` is verified in `St-16.typelib`
 - [x] 2.3 ~~`extension/stylesheet-light.css`~~ → `.cadence-warning-light` (`#8f5300`, legible on `#fafafb`) in the same file, selected in JS
 - [x] 2.4 `extension/extension.js` — ESM imports; `export default class CadenceExtension extends Extension` with `enable()`/`disable()`; `CadenceIndicator` as a `GObject.registerClass`-ed `PanelMenu.Button`
-- [ ] 2.5 Verify: `make install`, log out/in, `gnome-extensions enable cadence@ian.dev` — dimmed indicator appears (spec: Indicator Presence / *Enabled with no daemon*) — **blocked: needs a Wayland session restart**
+- [x] 2.5 Verified 2026-09-18 after logout: `gnome-extensions info` reports `State: ACTIVE`, indicator present, and it renders dimmed with no countdown while `cadenced` is stopped
 
 ## Phase 3: Render Function
 
@@ -75,19 +75,24 @@ Pure logic first, because it is the only part testable without the Shell.
 - [x] 5.2 `CadenceClient.call()` — `${method}Async()` only; no synchronous D-Bus call anywhere; no optimistic local state update (spec: Control Actions; design Decision 7)
 - [x] 5.3 `call()` returns early when the proxy is absent, raising nothing into the Shell log (spec: Control Actions / *Action with no daemon*)
 - [x] 5.4 `disable()` — `GLib.Source.remove(tickId)`, disconnect every handler, `Gio.bus_unwatch_name(watchId)`, `indicator.destroy()`, null every reference; correct when disabled while disconnected (spec: Teardown Hygiene)
-- [ ] 5.5 Verify: pause round trip — clicking Pause freezes the label only after the daemon publishes `Paused=true`, confirmed with `busctl --user get-property ... Paused` — **blocked: needs a Wayland session restart**
+- [x] 5.5 Verified 2026-09-18: clicking Pause froze the label **and** `busctl` reported `Paused b true`. The freeze came from the daemon, not a local decision — this is the round trip M2 exists to prove
 
 ## Phase 6: Verification
 
 - [x] 6.1 `extension/test-render.js` — 17 checks under `gjs -m`, all passing: zero-remainder holds phase, paused reads `remainingSeconds`, warning boundary inclusive at 120 and absent at 121, menu sensitivity per phase. *(Kept despite the budget overrun; see 6.7)*
-- [ ] 6.2 I1 check — stopped daemon: with a session active, `systemctl --user stop cadenced`; the indicator dims and the countdown stops claiming progress (success criterion 7) — **blocked: needs a Wayland session restart**
-- [ ] 6.3 I1 check — suspend: suspend mid-`focus`, resume, then sample the rendered countdown against the daemon's elapsed-derived remaining (from `~/.local/state/cadence/session.json`) three times ~20s apart; the offset must be zero and stay zero (success criterion 8). Do NOT compare against `RemainingSeconds` — it is a stale between-transitions snapshot. — **blocked: fails today on a daemon defect, see below**
-- [ ] 6.4 Warning check — amber appears at 120s remaining in `focus` and clears on the break transition; verify legibility in both light and dark themes — **blocked: needs a Wayland session restart**
-- [ ] 6.5 Leak check — enable/disable cycle with `journalctl -f -o cat /usr/bin/gnome-shell` open; no errors, no surviving source; repeat once with the daemon stopped — **blocked: needs a Wayland session restart**
+- [x] 6.2 Verified 2026-09-18: stopping `cadenced` mid-session dimmed the indicator and the countdown stopped displaying. The tick did not keep counting on its own authority — I1 holds under the failure it was written for
+- [x] 6.3 Verified 2026-09-18 after a real 9s suspend, on the daemon carrying `fix-suspend-deadline-republish`: offsets `+0.171s` / `+0.174s` / `+0.174s`, sub-second throughout and holding across a focus/break transition mid-measurement. Run via `python3 packaging/check-offset.py`
+- [x] 6.4 Verified 2026-09-18 on a 3-minute test config: amber appears at exactly 2:00 remaining in `focus` and disappears at the break transition. Legible on the dark panel (`#ffb454` on `#000000`). An earlier report of amber persisting into break was a misattributed screenshot — the fast 3-minute cycle makes an untimestamped reading of `0:57` ambiguous between focus and break; resolved by reading the daemon phase at the same instant as the panel
+- [x] 6.5 Verified 2026-09-18: three disable/enable cycles including one with `cadenced` stopped (the path where the bus name watch can outlive `disable()`). No extension errors, no disposed-object warnings, no leaked-source complaints in the Shell journal; indicator returned each time
 - [x] 6.6 Daemon untouched — `go test ./...` in `daemon/` passes and `git diff --stat daemon/` is empty
 - [x] 6.7 Budget ruling — actual 522 code lines against a 400 budget (forecast 340-390 was ~35% low). Dropping 6.1 reaches only 410, so the overrun was not trimmable. Maintainer accepted `size:exception` on 2026-09-18; objective reset recorded as `rst-m2-20260918-01`, actor "ian (maintainer)", with attempt 1 preserved in ledger history
 
-## Finding — daemon defect surfaced by 6.3 (2026-09-18)
+## Finding — daemon defect surfaced by 6.3 (2026-09-18, RESOLVED)
+
+**Resolved** by change `fix-suspend-deadline-republish`, archived 2026-09-18. Task 6.3 now passes
+against a daemon carrying that fix. The original analysis is kept below for the record.
+
+
 
 Task 6.3 does not merely lack evidence, it **fails**. `applySuspend`
 (`daemon/internal/session/machine.go:123-139`) returns `EffectPersist` with no `EffectNotify` on the

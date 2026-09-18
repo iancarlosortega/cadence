@@ -35,20 +35,31 @@ def main():
     if prop("Paused") == "true":
         sys.exit("session is paused — resume it first")
 
-    phase = prop("Phase")
-    state = json.load(open(STATE))
-    total = state[f"{phase}_minutes"] * 60.0
-
     worst = 0.0
     for i in range(SAMPLES):
+        # Re-read the phase every sample. A transition between samples changes
+        # the phase length, and a total carried over from the previous phase
+        # reports the difference between the two as drift.
+        phase_before = prop("Phase")
         now = time.time()
         ends = float(prop("PhaseEndsAt"))
         s = json.load(open(STATE))
+        phase_after = prop("Phase")
+
+        if phase_before != phase_after:
+            print(f"sample {i + 1}: skipped, phase changed mid-sample "
+                  f"({phase_before} -> {phase_after})")
+            if i < SAMPLES - 1:
+                time.sleep(GAP_SECONDS)
+            continue
+
+        total = s[f"{phase_after}_minutes"] * 60.0
         observed = datetime.datetime.fromisoformat(s["last_observed"]).timestamp()
         true_remaining = total - (s["elapsed_in_phase_ns"] / 1e9 + (now - observed))
         offset = true_remaining - (ends - now)
         worst = max(worst, abs(offset))
-        print(f"sample {i + 1}: true={true_remaining:9.3f}s  client={ends - now:9.3f}s  offset={offset:+.3f}s")
+        print(f"sample {i + 1}: phase={phase_after:5s} true={true_remaining:9.3f}s  "
+              f"client={ends - now:9.3f}s  offset={offset:+.3f}s")
         if i < SAMPLES - 1:
             time.sleep(GAP_SECONDS)
 

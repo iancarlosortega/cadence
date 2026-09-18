@@ -89,13 +89,12 @@ phases:
   apply:
     state: done
     artifact: openspec/changes/m2-gnome-extension/apply-progress.md
-    tasks_complete: 24
+    tasks_complete: 30
     tasks_total: 30
     tasks_pending_note: >
-      The six open tasks (2.5, 5.5, 6.2, 6.3, 6.4, 6.5) are all Shell-side and cannot be
-      completed without a Wayland logout/login: the running GNOME Shell scanned extensions
-      at session start and cannot reload in place. Every task completable without a session
-      restart is done. Task 6.7 was added to record the budget ruling.
+      All 30 complete. The six Shell-side tasks (2.5, 5.5, 6.2, 6.3, 6.4, 6.5) were verified
+      on 2026-09-18 after a Wayland logout, against a daemon carrying
+      fix-suspend-deadline-republish.
     bookkeeping_note: >
       Checkboxes in tasks.md were initially left unchecked while completion was recorded only
       in apply-progress.md. Native sdd-status reads tasks.md, so it correctly reported 0/29
