@@ -1,0 +1,147 @@
+change: m1-daemon-core
+project: cadence
+created: 2026-09-14
+artifact_store: openspec
+execution_mode: interactive
+delivery_strategy: exception-ok
+chain_strategy: null
+delivery_note: >
+  User explicitly accepted size:exception up front on 2026-09-14 — personal project,
+  PR review budget is not a concern. The Review Workload Guard must not stop to ask.
+  No pushing: the GitHub CLI is not configured with the user's personal account.
+  Commit/push remain separate human decisions and are not performed by any phase.
+
+summary: >
+  M1 — Go daemon core for cadence: timer state machine, TOML config, session
+  persistence, D-Bus adapter, CLI, and systemd user unit. No GNOME extension,
+  no UI, no real tier detection (TierSource is stubbed to T0).
+
+phases:
+  explore:
+    state: done
+    artifact: openspec/changes/m1-daemon-core/exploration.md
+  research:
+    state: done
+    artifact: openspec/changes/m1-daemon-core/research.md
+    request_id: res-m1-daemon-core-20260914-01
+    revision: 1
+    outcome: done
+    classes: [documentation, open-web]
+  proposal:
+    state: done
+    artifact: openspec/changes/m1-daemon-core/proposal.md
+    capabilities_new: [session-timer, session-persistence, daemon-control, daemon-configuration]
+    capabilities_modified: []
+  specs:
+    state: done
+    artifact: openspec/changes/m1-daemon-core/specs/
+    files:
+      - specs/session-timer/spec.md
+      - specs/session-persistence/spec.md
+      - specs/daemon-control/spec.md
+      - specs/daemon-configuration/spec.md
+    requirements: 9
+    scenarios: 14
+    word_count: 648
+  design:
+    state: done
+    artifact: openspec/changes/m1-daemon-core/design.md
+    decisions: 7
+    threat_matrix: not-applicable
+    word_count: 777
+  tasks:
+    state: done
+    artifact: openspec/changes/m1-daemon-core/tasks.md
+    phases: 6
+    task_count: 23
+    review_forecast:
+      budget_risk: High
+      chained_prs_recommended: false
+      chain_strategy: size-exception
+      decision_needed_before_apply: false
+    word_count: 503
+  apply:
+    state: done
+    artifact: openspec/changes/m1-daemon-core/apply-progress.md
+    tasks_complete: 23
+    tasks_total: 23
+    test_results: "20/20 pass (go test ./... in daemon/)"
+    changed_lines: 1706
+    runtime_attempt: passed (reset by maintainer, size:exception applied)
+  verify:
+    state: done
+    artifact: openspec/changes/m1-daemon-core/verify-report.md
+    verdict: pass_with_warnings
+    requirements: "9/9"
+    scenarios: "15/15"
+    blockers: 0
+    critical_findings: 0
+    warnings: 2
+  archive:
+    state: pending
+    artifact: null
+
+product_decisions: confirmed
+
+resolved_product_decisions:
+  - id: P1
+    question: >
+      When the machine suspends during an active session, does cadence treat the
+      suspended time as time away from the desk (crediting a break and resetting
+      the focus timer) or as a paused session that resumes where it left off?
+    raised_by: research C1-C4, G1
+    resolved: 2026-09-14
+    decision: away
+    answer: >
+      Suspended time is treated as time away from the desk. A suspend whose duration
+      reaches the existing idle-credit threshold credits a break and resets the focus
+      timer. A suspend shorter than that threshold is treated as ordinary idle time,
+      reusing the same rule rather than introducing a second concept.
+    rationale: >
+      User: "it would be away because i wont be on the pc so we assume im on a break".
+      Consistent with the already-confirmed idle-credit rule (idle >= 10 min credits a
+      break); treating suspend as a pause would demand a break minutes after returning
+      from a long absence, the exact punish-on-success failure idle-credit prevents.
+
+open_technical_decisions:
+  - id: D1
+    question: What the D-Bus interface exposes for the countdown
+    recommendation: >
+      Expose Phase, PhaseEndsAt, RemainingSeconds, Paused, Tier, SessionActive as
+      properties via prop.Export with Emit=EmitTrue; emit on transitions only and
+      let the client tick locally.
+  - id: D2
+    question: Clock handling in the domain
+    recommendation: Inject a Clock interface so the state machine is table-testable.
+  - id: D3
+    question: Session persistence across daemon restart
+    recommendation: >
+      Write on transitions plus a 60s heartbeat; store elapsed-in-phase rather than
+      an absolute deadline. Research adds: also persist on login1 PrepareForSleep(true);
+      the heartbeat still covers crashes, which emit no signal.
+  - id: D4
+    question: TOML library
+    recommendation: BurntSushi/toml 1.6.0, for Undecoded()-based unknown-key rejection.
+
+verified_facts:
+  go: 1.26.0
+  session_bus: unix:path=/run/user/1000/bus
+  godbus_dbus_v5: 5.2.2
+  burntsushi_toml: 1.6.0
+  pelletier_go_toml_v2: 2.4.3
+  mutter_idlemonitor: verified working (GetIdletime returned 11126 ms)
+  strict_tdd: false
+
+risks:
+  - Two-clock skew and suspend/resume behavior must be pinned in the spec.
+  - Pause must be stored as remaining-duration, not as a deadline.
+  - strict_tdd is false only because the repo was empty; GJS has no standard runner.
+  - Bus name dev.ian.Cadence is durable across daemon, extension, and packaging.
+  - PipeWire mic detection unverified — deferred to M5, out of scope for M1.
+  - Review budget likely exceeds 400 lines; ask-on-risk will surface this at tasks.
+
+notes:
+  - SDD sub-agent dispatch is refused in this runtime (hooks expose no authenticated
+    caller provenance). All phases run inline from their SKILL.md.
+  - sdd-init persisted project context to Engram (ids 46/47/48) before the artifact
+    store was switched to openspec for change artifacts.

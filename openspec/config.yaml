@@ -1,0 +1,33 @@
+schema: spec-driven
+
+context: |
+  Project: cadence — personal stand-up / break reminder for Fedora 42 + GNOME 48 (Wayland).
+  Tech stack: Go 1.26 daemon (domain, D-Bus, CLI) + GJS GNOME Shell extension (all UI, later milestone).
+  Architecture: Hexagonal. Daemon is the domain; extension, CLI and D-Bus are adapters.
+  Tier detection (PipeWire / ScreenCast portal / camera / idle) is one port with four driven adapters.
+  Testing: none detected yet (empty repo). Planned: go test ./... for daemon/. GJS has no standard runner.
+  Style: English artifacts, neutral professional register.
+
+rules:
+  proposal:
+    - State explicitly what is out of scope for this milestone
+  specs:
+    - Use Given/When/Then for scenarios
+    - Use RFC 2119 keywords (MUST, SHALL, SHOULD, MAY)
+  design:
+    - Document architecture decisions with rationale
+    - Keep the domain free of GNOME and wall-clock coupling
+  tasks:
+    - Group by phase, use hierarchical numbering
+    - Keep tasks completable in one session
+  apply:
+    guidelines:
+      - Domain code must not import D-Bus, GNOME, or OS clock directly
+    tdd: false
+    test_command: ""
+  verify:
+    test_command: ""
+    build_command: ""
+    coverage_threshold: 0
+  archive:
+    - Warn before merging destructive deltas
