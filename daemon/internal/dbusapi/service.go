@@ -116,7 +116,9 @@ func New(conn *dbus.Conn, initial session.State, store session.Store, clock sess
 		return nil, fmt.Errorf("dbusapi: name %s already owned (reply %d) — is cadenced already running?", BusName, reply)
 	}
 
-	s.publish() // seed properties from the actual initial state
+	if err := s.publish(); err != nil { // seed properties from the actual initial state
+		return nil, fmt.Errorf("dbusapi: seed properties: %w", err)
+	}
 	return s, nil
 }
 
@@ -173,7 +175,9 @@ func (s *Service) apply(ev session.Event) *dbus.Error {
 				return dbus.MakeFailedError(fmt.Errorf("dbusapi: persist: %w", err))
 			}
 		case session.EffectNotify:
-			s.publish()
+			if err := s.publish(); err != nil {
+				return dbus.MakeFailedError(fmt.Errorf("dbusapi: publish: %w", err))
+			}
 		}
 	}
 	return nil
@@ -185,7 +189,19 @@ func (s *Service) apply(ev session.Event) *dbus.Error {
 // github.com/godbus/dbus/v5/prop: Set/SetMust call emitChange internally.
 // publish is only ever called from within apply, i.e. only on a real
 // transition, never from a quiet Tick.
-func (s *Service) publish() {
+// publish converts prop's panic-on-error contract into an error. godbus
+// exposes only SetMust for an internal write: Set enforces the Writable flag,
+// which is false for every property here, and the non-panicking p.set is
+// unexported. SetMust panics on a closed connection, which is ordinary at
+// logout, so that panic is caught here and handed to the caller instead of
+// taking the process down (specs/daemon-control; cmd/cadenced logs it).
+func (s *Service) publish() (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("publish: %v", r)
+		}
+	}()
+
 	now := s.clock.Now()
 	remaining := s.state.Remaining()
 	if s.state.Paused {
@@ -202,4 +218,5 @@ func (s *Service) publish() {
 	s.props.SetMust(InterfaceName, "RemainingSeconds", int64(remaining.Seconds()))
 	s.props.SetMust(InterfaceName, "Paused", s.state.Paused)
 	s.props.SetMust(InterfaceName, "Tier", string(s.state.Tier))
+	return nil
 }

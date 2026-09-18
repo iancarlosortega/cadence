@@ -208,3 +208,64 @@ func TestStartSessionWhenAlreadyActiveIsNoop(t *testing.T) {
 		t.Fatalf("want no effect from a redundant start, got %d", len(effects))
 	}
 }
+
+// specs/session-persistence, Requirement "Downtime Is Time Away", Scenario
+// "Long downtime credits a break". Downtime reaches the domain as the gap
+// between the persisted LastObserved and startup, carried by EventSuspended.
+func TestLongDowntimeCreditsBreak(t *testing.T) {
+	now := time.Date(2026, 9, 18, 9, 0, 0, 0, time.UTC)
+	s := startedFocus(now, 12*time.Minute)
+
+	restartAt := now.Add(time.Hour)
+	next, effects := Apply(s, EventSuspended{From: now, To: restartAt}, restartAt)
+
+	if next.Phase != PhaseFocus || next.ElapsedInPhase != 0 {
+		t.Fatalf("got phase=%s elapsed=%s, want a fresh focus after 1h of downtime", next.Phase, next.ElapsedInPhase)
+	}
+	if !hasNotify(effects) {
+		t.Fatal("want EffectNotify so clients learn the session was reset")
+	}
+}
+
+// specs/session-persistence, Requirement "Downtime Is Time Away", Scenario
+// "Short downtime does not credit".
+func TestShortDowntimeDoesNotCredit(t *testing.T) {
+	now := time.Date(2026, 9, 18, 9, 0, 0, 0, time.UTC)
+	s := startedFocus(now, 12*time.Minute)
+
+	restartAt := now.Add(90 * time.Second)
+	next, _ := Apply(s, EventSuspended{From: now, To: restartAt}, restartAt)
+
+	if next.ElapsedInPhase != 12*time.Minute {
+		t.Fatalf("elapsed = %s, want unchanged 12m after 90s of downtime", next.ElapsedInPhase)
+	}
+	if next.Phase != PhaseFocus {
+		t.Fatalf("phase = %s, want focus", next.Phase)
+	}
+}
+
+// specs/session-persistence, Requirement "Downtime Is Time Away", Scenario
+// "Downtime and suspend agree".
+//
+// The two paths agree only because cmd/cadenced routes the startup gap through
+// EventSuspended. Routing it through a tick instead charges the whole absence
+// as elapsed work, which is the defect this change fixes. This test pins that
+// difference so the startup path cannot quietly regress to a tick.
+func TestDowntimeAndSuspendAgree(t *testing.T) {
+	now := time.Date(2026, 9, 18, 9, 0, 0, 0, time.UTC)
+	gap := 8 * time.Hour
+	resumeAt := now.Add(gap)
+
+	viaSuspend, _ := Apply(startedFocus(now, 12*time.Minute), EventSuspended{From: now, To: resumeAt}, resumeAt)
+	viaTick, _ := Apply(startedFocus(now, 12*time.Minute), EventTick{Tier: TierT0}, resumeAt)
+
+	if viaSuspend.Phase != PhaseFocus || viaSuspend.ElapsedInPhase != 0 {
+		t.Fatalf("suspend path gave %s/%s, want a fresh focus", viaSuspend.Phase, viaSuspend.ElapsedInPhase)
+	}
+	if viaTick.Phase == viaSuspend.Phase {
+		t.Fatalf("tick path now agrees with the suspend path (%s); if applyTick learned the "+
+			"idle-credit rule, delete this test and the startup indirection with it", viaTick.Phase)
+	}
+	t.Logf("8h absence: suspend path -> %s, tick path -> %s (startup must use the suspend path)",
+		viaSuspend.Phase, viaTick.Phase)
+}

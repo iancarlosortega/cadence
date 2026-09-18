@@ -1,0 +1,246 @@
+change: fix-daemon-absence-handling
+project: cadence
+created: 2026-09-18
+artifact_store: openspec
+execution_mode: interactive
+delivery_strategy: single-pr
+chain_strategy: null
+delivery_note: >-
+  Preflight carried forward from this session: interactive pace, openspec artifacts, single-pr
+  delivery. Expected well under 150 lines. Commit and push remain separate human decisions.
+
+summary: >-
+  Fix two daemon defects found while verifying M2 on real hardware. F3: a logout panics the process
+  because publish uses prop.SetMust, which panics on a closed bus; fixed by using Set and by binding
+  the unit to graphical-session.target so the daemon no longer outlives its session. F4: daemon
+  downtime is billed as focus work; fixed by applying the startup gap as EventSuspended so downtime
+  and suspend obey one rule.
+
+phases:
+  explore:
+    state: done
+    artifact: openspec/changes/fix-daemon-absence-handling/exploration.md
+  research:
+    state: not-selected
+    artifact: null
+    note: >-
+      No external evidence needed. Both defects, their mechanisms and the systemd facts were
+      established from this repository and this machine on 2026-09-18.
+  proposal:
+    state: done
+    artifact: openspec/changes/fix-daemon-absence-handling/proposal.md
+    capabilities_new: []
+    capabilities_modified: [session-persistence]
+  specs:
+    state: done
+    artifact: openspec/changes/fix-daemon-absence-handling/specs/
+    files:
+      - specs/session-persistence/spec.md
+    delta_sections: [MODIFIED, ADDED]
+    requirements: 2
+    scenarios: 6
+    note: >-
+      One MODIFIED requirement and one ADDED. Durable State had to be modified, not just extended:
+      its "Restart resumes position" scenario asserts the daemon resumes within 60s of the persisted
+      elapsed, which a long downtime now deliberately violates by crediting a break and resetting to
+      a fresh focus. The scenario is scoped to a downtime below the idle-credit threshold. The "No
+      session to resume" scenario is preserved verbatim, verified by diff against the main spec.
+      The new Downtime Is Time Away requirement mirrors session-timer's Suspend Is Time Away and
+      states the 60s measurement tolerance explicitly rather than leaving it implicit.
+  design:
+    state: done
+    artifact: openspec/changes/fix-daemon-absence-handling/design.md
+    decisions: 4
+    threat_matrix: not-applicable
+    word_count: 1038
+    note: >-
+      Decision 4 records that the two fixes compose rather than being independent. Binding the unit
+      to the graphical session converts a long logout into daemon downtime, which is precisely what
+      the F4 fix then interprets as time away. Fixing F3 alone would have made F4 more visible, not
+      less — a three-hour logout would have been billed as focus work at the next login. They must
+      ship together.
+    migration_note: >-
+      The unit's WantedBy changes, so install is not enough: the service must be disabled and
+      re-enabled once for the new Install section to take effect. Belongs in the runbook.
+  tasks:
+    state: done
+    artifact: openspec/changes/fix-daemon-absence-handling/tasks.md
+    phases: 5
+    task_count: 21
+    review_forecast:
+      estimated_changed_lines: "~110"
+      budget_risk: None
+      chained_prs_recommended: false
+      chain_strategy: null
+      decision_needed_before_apply: false
+      guard_note: >-
+        Well inside the 400-line budget. Estimate padded because M2's forecast came in 35% low.
+    note: >-
+      Two mutation checks, not one: 5.2 removes the startup ApplySuspend and expects the long-gap
+      tests to go red, and 5.3 restores SetMust in one property write and expects the publish test to
+      go red by panicking rather than erroring. Tasks 5.10 and the real-shutdown half of 5.8 cannot
+      be simulated — systemctl stop exercises the downtime rule but not the PartOf propagation, which
+      is the half of F3 that stops the daemon before its bus disappears. That needs a genuine session
+      cycle.
+  apply:
+    state: done
+    artifact: openspec/changes/fix-daemon-absence-handling/apply-progress.md
+    tasks_complete: 21
+    tasks_total: 21
+    changed_lines: 129
+    runtime_attempt: "settled state=complete on attempt 1, within the 250-line budget"
+    test_results: "go test ./... all five packages pass; go vet clean; both mutation checks fail correctly"
+    open_task: none
+    logout_verification: >-
+      Completed 2026-09-18 on a real cycle, 17:04:18 logout to 17:16:22 login, 12m04s out. Panic
+      count unchanged at 1 (the pre-fix crash); NRestarts=0; the journal shows cadenced shutting down
+      immediately before graphical-session.target finished stopping, which is PartOf propagation
+      directly observed rather than inferred; the daemon started automatically at login. The same
+      12-minute gap exercised F4 end to end: a fresh focus with RemainingSeconds=180 and elapsed 0s,
+      where the defect would have produced a break.
+    live_verification:
+      - "20s downtime: remaining stayed 180s — not charged. Old build would have shown ~148s."
+      - "70s downtime against a 60s idle-credit: resumed at elapsed 0s, a fresh focus. Old build ~130s."
+      - "Unit re-wired: symlink moved to graphical-session.target.wants; PartOf and WantedBy correct."
+      - "Zero panics since install, NRestarts=0 across every stop/start."
+      - "Extension unaffected: 17/17 render checks pass."
+    deviations:
+      - >-
+        Design Decision 1 was WRONG and was corrected during apply. prop.Properties.Set enforces the
+        Writable flag, which is false for all six properties, so it broke New() with ErrReadOnly. The
+        non-panicking p.set is unexported, so there is no exported non-panicking internal write.
+        publish keeps SetMust and converts the panic with a narrow recover at the boundary. The
+        design was amended rather than left stale.
+      - >-
+        Task 5.2's mutation check was invalid as written: removing the startup ApplySuspend broke no
+        test, because the domain tests call Apply directly and never touch main.go's wiring. Fixed by
+        extracting startupGap() with its own tests. The mutation check found a hole in its own plan.
+      - >-
+        TestDowntimeAndSuspendAgree was first written tautologically, comparing Apply with the same
+        event on both sides. Rewritten to contrast the suspend path against the tick path and assert
+        they still differ, pinning why the startup indirection exists.
+  verify:
+    state: done
+    artifact: openspec/changes/fix-daemon-absence-handling/verify-report.md
+    verdict: pass
+    requirements: "2/2"
+    scenarios: "6/6"
+    blockers: 0
+    critical_findings: 0
+    warnings: 3
+    verified_on: "real logout/login cycle 2026-09-18 17:04:18 to 17:16:22, 12m04s out"
+    warning_notes:
+      - >-
+        F4 under-charges by up to 60s after a clean restart because LastObserved rides a 60s
+        heartbeat. Bounded and intentional; the behaviour it replaces over-charged without limit.
+      - >-
+        Live checks ran against a 3-minute focus and 1-minute break test config. The rules are
+        duration-independent but the 50-minute defaults were not themselves observed.
+      - >-
+        recover in publish converts any future panic there into an error, not only a closed
+        connection. Intended at this boundary, but an unexpected panic now surfaces as a logged tick
+        error rather than a crash.
+    resolves: [F3, F4]
+  archive:
+    state: done
+    artifact: openspec/changes/archive/2026-09-18-fix-daemon-absence-handling/archive-report.md
+    archived: 2026-09-18
+    specs_merged:
+      - target: openspec/specs/session-persistence/spec.md
+        requirement: Durable State
+        delta: MODIFIED
+        destructive: false
+        note: >-
+          Gained one qualifying line on the "Restart resumes position" scenario. Without it the spec
+          would contradict itself, since a long downtime now deliberately resets to a fresh focus
+          rather than resuming position.
+      - target: openspec/specs/session-persistence/spec.md
+        requirement: Downtime Is Time Away
+        delta: ADDED
+        destructive: false
+        note: >-
+          Mirrors session-timer's "Suspend Is Time Away". Requirement count went 1 to 2, scenarios 2
+          to 6. Nothing removed.
+    resolved: [F3, F4]
+    carried_forward: [F2]
+
+relationships:
+  dependsOn: []
+  supersedes: []
+  amends: []
+  conflictsWith: []
+  resolves:
+    - finding: F3
+      raised_by: m2-gnome-extension
+    - finding: F4
+      raised_by: m2-gnome-extension
+  sameDomainActiveChanges: []
+
+product_decisions: confirmed
+
+resolved_product_decisions:
+  - id: P1
+    question: >-
+      After a logout kills the session bus, the daemon can still count and persist but can tell
+      nobody. What should it do?
+    raised_by: exploration Decision 2
+    resolved: 2026-09-18
+    decision: exit-cleanly-let-systemd-manage
+    answer: >-
+      The daemon should not outlive its session. Logout ends it cleanly and login brings it back
+      automatically, so the panel is live immediately on re-login with no manual restart.
+    rationale: >-
+      The user chose this outcome over keeping a running daemon attached to a dead connection, which
+      would have left the panel dim until a manual restart.
+    implementation_note: >-
+      The user's option was previewed as Restart=always with systemd retrying every 2s. That literal
+      mechanism was rejected at proposal on measured evidence: this machine has StartLimitBurst=5
+      over StartLimitIntervalUSec=10s with RestartUSec=2s, so a daemon exiting for want of a bus
+      would exhaust the limit within ten seconds, be marked failed, and NOT return at login — worse
+      than the defect. The chosen outcome is delivered instead by PartOf=graphical-session.target
+      plus WantedBy=graphical-session.target, which stops the daemon cleanly at logout via the
+      SIGTERM path it already implements and starts it at login, with no restart churn. The
+      user-visible result is the one they selected.
+
+resolved_technical_decisions:
+  - id: D1
+    question: What publish() should do when the bus is gone
+    resolved: 2026-09-18
+    decision: set-not-setmust
+    answer: >-
+      Use prop.Properties.Set and return the error through apply and Tick. main.go:104-107 already
+      logs and continues on a Tick error; SetMust's panic simply bypassed handling that already
+      existed. Kept as defence in depth even with the unit change, for the race where the bus dies
+      moments before SIGTERM arrives.
+  - id: D2
+    question: How a startup gap should be interpreted
+    resolved: 2026-09-18
+    decision: reuse-suspend-rule
+    answer: >-
+      Apply EventSuspended{From: LastObserved, To: now} at startup. The gap is exactly the quantity
+      that event already describes, so downtime inherits the table-tested suspend rule and M1
+      decision P1 is satisfied without a second concept.
+    known_trade: >-
+      LastObserved can be up to 60s stale after a clean run, so this under-charges the phase by up to
+      a minute. Today's behaviour over-charges without limit — an overnight shutdown bills eight
+      hours of sleep as focus. A bounded under-charge under a minute is the better error and matches
+      the 60s tolerance session-persistence already allows.
+
+verified_facts:
+  f3_panic: "panic: dbus: connection closed by user, prop.SetMust at service.go:199 via apply/Tick"
+  f3_existing_error_path: "main.go:104-107 already logs a Tick error and continues"
+  f4_divergence: "8h gap as downtime yields phase=break; the same 8h as suspend yields phase=focus"
+  graphical_session_target: "active on this machine, ActiveEnterTimestamp matches the 2026-09-18 re-login"
+  graphical_session_precedent: "at-spi-dbus-bus, flatpak-portal and ten gvfs-* services already bind to it"
+  systemd_rate_limit: "StartLimitBurst=5, StartLimitIntervalUSec=10s, RestartUSec=2s"
+
+risks:
+  - Unit change may not stop the daemon at logout; verified by runbook after a real logout.
+  - F4 under-charges by up to 60s after a clean restart; bounded and spec-tolerated.
+  - Neither fix is provable by unit test alone; both need a real logout and a real long-gap restart.
+
+notes:
+  - SDD sub-agent dispatch is refused in this runtime, so all phases run inline, as in M1 and M2.
+  - >-
+    Both defects were found by running the system during M2 verification, not by reading it. That is
+    now three such defects, none of which code review had surfaced.

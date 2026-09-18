@@ -1,10 +1,6 @@
-# session-persistence Specification
+# session-persistence Specification (delta)
 
-## Purpose
-
-Durable session state across daemon restart and suspend.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Durable State
 
@@ -22,6 +18,8 @@ State MUST persist elapsed-in-phase, never an absolute deadline. It MUST be writ
 - GIVEN no persisted state
 - WHEN the daemon starts
 - THEN no session is active
+
+## ADDED Requirements
 
 ### Requirement: Downtime Is Time Away
 

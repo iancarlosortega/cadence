@@ -89,6 +89,12 @@ func run() error {
 	}
 	log.Printf("cadenced: exported %s at %s", dbusapi.BusName, dbusapi.ObjectPath)
 
+	if ev, ok := startupGap(initial, found, now); ok {
+		if err := svc.ApplySuspend(ev); err != nil {
+			log.Printf("cadenced: startup gap: %v", err)
+		}
+	}
+
 	watchSystemSleep(svc, clock)
 
 	ticker := time.NewTicker(tickInterval)
@@ -114,6 +120,17 @@ func run() error {
 			return nil
 		}
 	}
+}
+
+// startupGap reports the absence to replay on resume. The gap since
+// LastObserved is time this daemon did not witness, which is what
+// EventSuspended already describes — so downtime and suspend obey one rule
+// (specs/session-persistence, "Downtime Is Time Away").
+func startupGap(initial session.State, found bool, now time.Time) (session.EventSuspended, bool) {
+	if !found || !initial.Active {
+		return session.EventSuspended{}, false
+	}
+	return session.EventSuspended{From: initial.LastObserved, To: now}, true
 }
 
 // watchSystemSleep is best-effort: the system bus or login1 may be

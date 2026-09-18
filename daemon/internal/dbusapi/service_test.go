@@ -12,7 +12,7 @@ import (
 type memStore struct{ saved session.State }
 
 func (m *memStore) Load() (session.State, bool, error) { return session.State{}, false, nil }
-func (m *memStore) Save(s session.State) error          { m.saved = s; return nil }
+func (m *memStore) Save(s session.State) error         { m.saved = s; return nil }
 
 type fixedTier struct{}
 
@@ -146,4 +146,32 @@ func drainFor(ch <-chan *godbus.Signal, d time.Duration) {
 			return
 		}
 	}
+}
+
+// A closed connection is an ordinary condition at logout. publish must return
+// that as an error so cmd/cadenced can log it, instead of panicking through
+// prop.SetMust and taking the process down (F3).
+func TestPublishOnClosedConnectionErrorsNotPanics(t *testing.T) {
+	clock := session.NewFakeClock(time.Date(2026, 9, 18, 9, 0, 0, 0, time.UTC))
+	svc, conn := newTestService(t, clock)
+
+	if err := svc.StartSession(); err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+
+	if err := conn.Close(); err != nil {
+		t.Fatalf("closing the connection: %v", err)
+	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("publish panicked on a closed connection instead of returning an error: %v", r)
+		}
+	}()
+
+	err := svc.publish()
+	if err == nil {
+		t.Fatal("publish returned nil on a closed connection, want an error")
+	}
+	t.Logf("publish reported: %v", err)
 }
