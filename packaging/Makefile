@@ -10,7 +10,7 @@ BINDIR  := $(PREFIX)/bin
 UNITDIR := $(HOME)/.config/systemd/user
 EXTDIR  := $(HOME)/.local/share/gnome-shell/extensions/$(UUID)
 
-.PHONY: all install install-daemon install-extension uninstall nested test
+.PHONY: all install install-daemon install-extension uninstall nested test check-offset
 
 all: install
 
@@ -37,6 +37,11 @@ uninstall:
 	rm -f $(UNITDIR)/cadenced.service
 	rm -rf $(EXTDIR)
 	systemctl --user daemon-reload
+
+# Sample the client-derived countdown against the daemon's elapsed-derived truth.
+# Needs an active unpaused session. Prints its own PASS/FAIL verdict.
+check-offset:
+	python3 $(ROOT)/packaging/check-offset.py
 
 # Pure-logic checks for the render function. Runs outside the Shell.
 test:
