@@ -1,0 +1,262 @@
+change: fix-suspend-deadline-republish
+project: cadence
+created: 2026-09-18
+artifact_store: openspec
+execution_mode: interactive
+delivery_strategy: single-pr
+chain_strategy: null
+delivery_note: >-
+  Preflight collected 2026-09-18 for this change: interactive pace, openspec artifacts,
+  single-pr delivery. The change is expected well under 100 lines, so the 400-line budget
+  is not in play. Commit and push remain separate human decisions.
+
+summary: >-
+  Emit EffectNotify on the two paths that move the effective phase deadline without a phase
+  change (short suspend, idle pause), so PhaseEndsAt is republished and clients stop drifting
+  from the daemon. Amends the daemon-control Change Notification requirement and fixes the
+  test that discarded the effects and hid the defect.
+
+phases:
+  explore:
+    state: done
+    artifact: openspec/changes/fix-suspend-deadline-republish/exploration.md
+  research:
+    state: not-selected
+    artifact: null
+    note: >-
+      No external evidence needed. The defect, its mechanism and its measurement are all
+      established from this repository and a live daemon run on 2026-09-18.
+  proposal:
+    state: done
+    artifact: openspec/changes/fix-suspend-deadline-republish/proposal.md
+    capabilities_new: []
+    capabilities_modified: [daemon-control]
+  specs:
+    state: done
+    artifact: openspec/changes/fix-suspend-deadline-republish/specs/
+    files:
+      - specs/daemon-control/spec.md
+    delta_sections: [MODIFIED]
+    requirements: 1
+    scenarios: 3
+    revision: 2
+    note: >-
+      One MODIFIED requirement, Change Notification, carrying the entire updated block per the
+      OpenSpec convention that MODIFIED replaces the whole matching requirement. The existing
+      "No per-second traffic" scenario is preserved verbatim, verified by diff against
+      openspec/specs/daemon-control/spec.md. The Control Surface requirement in the main spec is
+      untouched. Revision 2 (design, 2026-09-18) dropped the two idle scenarios when the idle path
+      was rescoped out, and narrowed the drift scenario to suspends and transitions. The requirement
+      itself stays general on purpose: the idle branch is unreachable today because IdleSource is
+      stubbed, so no reachable path violates it, and M4 inherits it as a stated obligation.
+  design:
+    state: done
+    artifact: openspec/changes/fix-suspend-deadline-republish/design.md
+    decisions: 4
+    threat_matrix: not-applicable
+    word_count: 868
+    note: >-
+      Decision 1 keeps the emission in the domain rather than the adapter, because the domain is the
+      only layer that knows the deadline moved; putting it in the adapter would recreate the
+      two-places-decide condition that produced the defect. Decision 3 makes the amended test assert
+      on the effect list rather than only on state, which is the specific gap that hid the bug.
+  tasks:
+    state: done
+    artifact: openspec/changes/fix-suspend-deadline-republish/tasks.md
+    phases: 3
+    task_count: 10
+    review_forecast:
+      estimated_changed_lines: "~45"
+      budget_risk: None
+      chained_prs_recommended: false
+      chain_strategy: null
+      decision_needed_before_apply: false
+      guard_note: >-
+        An order of magnitude inside the 400-line budget. Estimate is deliberately generous because
+        M2's forecast came in 35% low; even at triple this it does not approach the ceiling.
+    note: >-
+      Task 3.2 is a mutation check: remove the EffectNotify line, confirm both new assertions go red,
+      restore it. A regression test never observed failing is a guess. Task 3.4 re-runs the exact
+      measurement that found the defect, because the unit tests prove the effect is emitted but only
+      the live sampling proves a real client stops drifting.
+  apply:
+    state: done
+    artifact: openspec/changes/fix-suspend-deadline-republish/apply-progress.md
+    tasks_complete: 10
+    tasks_total: 10
+    changed_lines: 44
+    files_changed: [daemon/internal/session/machine.go, daemon/internal/session/machine_test.go]
+    test_results: "go test ./... in daemon passes; mutation check confirmed both new assertions fail without the fix"
+    runtime_attempt: >-
+      settled state=complete on attempt 1, within the 150-line budget. Untracked paths were excluded
+      from the candidate so the budget measured tracked code rather than planning prose.
+    live_verification: >-
+      Real 9s suspend (systemd-logind 15:34:58 to 15:35:07), the same duration that produced the
+      defect. Full-precision offset across three samples: +0.319s, +0.319s, +0.319s. Sub-second and
+      constant, which is the whole-second quantization of PhaseEndsAt at publish, not drift. The
+      identical suspend previously left a constant 3 whole seconds that never recovered.
+    deviations: none
+    observed_not_touched:
+      - >-
+        daemon/internal/session/state.go fails gofmt on a pre-existing comment-alignment nit,
+        unrelated to this change and deliberately not bundled into a bugfix diff.
+      - IdleSince (state.go:57) remains dead; covered by finding F2 for M4.
+  verify:
+    state: done
+    artifact: openspec/changes/fix-suspend-deadline-republish/verify-report.md
+    verdict: pass
+    requirements: "1/1"
+    scenarios: "3/3"
+    design_decisions_checked: "4/4"
+    blockers: 0
+    critical_findings: 0
+    warnings: 1
+    warning_note: >-
+      PhaseEndsAt has whole-second resolution because it is published as now.Add(remaining).Unix(),
+      so a client sits permanently up to 1s below exact truth. Contract resolution, not drift: it
+      does not accumulate and resets at every publish. Success criterion 3's literal "offset zero"
+      is unachievable at full precision and should be read as "no persisting whole-second offset".
+    empirical_checks:
+      - "60s dbus-monitor during active unpaused focus with no transition: 0 PropertiesChanged"
+      - "go vet ./... clean; go test ./... all packages pass"
+      - "D-Bus surface after change: 5 methods, 6 properties, identical to before"
+      - "internal/dbusapi, internal/store and extension: 0 changed files"
+  archive:
+    state: done
+    artifact: openspec/changes/archive/2026-09-18-fix-suspend-deadline-republish/archive-report.md
+    archived: 2026-09-18
+    specs_merged:
+      - target: openspec/specs/daemon-control/spec.md
+        requirement: Change Notification
+        delta: MODIFIED
+        destructive: false
+        note: >-
+          Additive rewrite of one requirement body. The "No per-second traffic" scenario is preserved
+          byte-for-byte, two scenarios were added, the Control Surface requirement is untouched, and
+          the requirement count is unchanged at 2. Nothing was removed.
+    carried_forward: [F2]
+
+relationships:
+  dependsOn: []
+  supersedes: []
+  amends: []
+  conflictsWith: []
+  blocks:
+    - change: m2-gnome-extension
+      why: >-
+        M2 task 6.3 and success criterion 8 cannot pass until this lands. M2 finding F1 is
+        this defect. M2 remains consumer-only and is not edited by this change.
+  sameDomainActiveChanges: [m2-gnome-extension]
+
+rescopes:
+  - id: R1
+    date: 2026-09-18
+    phase: design
+    what: The idle-pause path was removed from scope after being accepted into it.
+    why: >-
+      Product decision P1 was taken on my stated basis that the idle branch was the same one-line
+      fix as the suspend branch. Design proved that false. The branch runs on every tick while idle,
+      so an unguarded EffectNotify is a per-second heartbeat and it needs edge detection, for which
+      the natural mechanism (IdleSince, state.go:57) is declared but never read or written anywhere.
+      More decisively, during idle LastObserved advances while ElapsedInPhase is frozen, so the
+      correct deadline moves continuously across the window rather than at its edges; edge emission
+      would bound the error, not remove it. Removing it requires deciding what a client shows while
+      idle, which changes the D-Bus contract M2 consumes and is M4 design work.
+    user_ruling: >-
+      Presented with the corrected analysis on 2026-09-18, the user chose "suspend only, idle to M4".
+    consequence: >-
+      The user's earlier P1 answer was made on inaccurate information from me and has been
+      superseded rather than silently honoured.
+
+findings:
+  - id: F2
+    title: Idle-pause path shares the defect class and is handed to M4
+    discovered: 2026-09-18
+    discovered_by: design of this change
+    severity: medium
+    owner: M4 (idle gating)
+    status: deferred
+    reachable_today: false
+    summary: >-
+      applyTick's idle-pause branch (machine.go:100-105) declines to advance elapsed while wall time
+      passes, which moves the effective deadline, and returns no effects at all — neither notify nor
+      persist. Its comment asserts "nothing observable changed", which is false.
+    why_not_fixed_here: >-
+      It is not the same fix. It needs edge detection because the branch runs every tick, and even
+      correct edge emission leaves a client wrong for the length of the idle window because the
+      deadline advances continuously throughout it. Being fully correct requires an idle display
+      decision that changes the published contract.
+    unreachable_because: IdleSource is stubbed to zero until M4, so the branch never executes.
+    m4_obligations:
+      - Satisfy the daemon-control Change Notification requirement for the idle paths it makes reachable.
+      - Decide what a client displays during an idle window, since the deadline advances throughout it.
+      - Either bring the dead IdleSince field (state.go:57) to life or delete it.
+      - Delete the "nothing observable changed" comment, which is false.
+
+product_decisions: confirmed
+
+resolved_product_decisions:
+  - id: P1
+    question: >-
+      Is the idle-pause path in scope, given it carries the identical defect but is
+      unreachable until M4 because IdleSource is stubbed to zero?
+    raised_by: exploration Decision 2
+    resolved: 2026-09-18
+    decision: fix-both-paths
+    superseded_by: R1
+    status: superseded
+    answer: >-
+      SUPERSEDED at design by rescope R1. Originally both paths; now the suspend path only, with the
+      idle path deferred to M4 as finding F2.
+    rationale: >-
+      Apply is a pure function, so the idle path is provable and testable today by passing
+      EventTick{IdleFor}, which makes this an existing defect in existing code rather than
+      speculative future-proofing. Fixing it now means M4 inherits a correct domain, and the
+      misleading "nothing observable changed" comment dies before it misleads whoever writes
+      idle gating.
+
+resolved_technical_decisions:
+  - id: D1
+    question: What the daemon-control Change Notification requirement should actually require
+    resolved: 2026-09-18
+    decision: key-on-changed-value
+    answer: >-
+      Rewrite the requirement so the trigger is a change to a published property's correct
+      value, with the prohibition scoped to a tick that changes nothing. The current wording,
+      "on transitions only", was read as "only on phase transitions" and is how both defects
+      were written without review catching them.
+  - id: D2
+    question: Does emitting on these paths conflict with the no-per-second-traffic rule
+    resolved: 2026-09-18
+    decision: no-conflict
+    answer: >-
+      A suspend/resume is rare and discrete. The idle-pause case emits once when the threshold
+      is crossed, not per tick, because the state stops advancing and further ticks produce no
+      change. The rule forbids a heartbeat, not reporting real changes.
+
+verified_facts:
+  defective_paths:
+    - "daemon/internal/session/machine.go:123-139 applySuspend short-suspend path"
+    - "daemon/internal/session/machine.go:100-105 applyTick idle-pause path"
+  publish_trigger: "daemon/internal/dbusapi/service.go:169-188, publish runs only on EffectNotify"
+  deadline_computation: "service.go:194-202, endsAt = now + Remaining(), already correct"
+  test_that_hid_it: "machine_test.go:129 discards effects via `next, _ := Apply(...)`"
+  sibling_test_asserts_effects: "machine_test.go:118-120 TestLongSuspendCreditsBreak"
+  measured_offset: "constant 3s across 3 samples 20s apart after a 9s suspend, 2026-09-18"
+  idle_source_stubbed: true
+
+risks:
+  - A future edit silently dropping the notification again; both tests now assert on effects.
+  - >-
+    Idle-pause cannot be verified end-to-end until M4 ships real idle detection; the table test
+    drives Apply directly in the meantime.
+  - >-
+    The sleep.go cold-start edge (sleepStarted initialises to clock.Now, so a daemon starting
+    during a suspend computes From = daemon start) is real, adjacent and deliberately out of scope.
+
+notes:
+  - >-
+    SDD sub-agent dispatch is refused in this runtime, so all phases run inline, as in M1 and M2.
+  - >-
+    Found while verifying M2 task 6.3 on a live daemon rather than by reading code, which is why
+    the measurement, not the source, is the primary evidence in exploration.

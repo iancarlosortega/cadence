@@ -119,6 +119,15 @@ func TestLongSuspendCreditsBreak(t *testing.T) {
 	}
 }
 
+func hasNotify(effects []Effect) bool {
+	for _, e := range effects {
+		if _, ok := e.(EffectNotify); ok {
+			return true
+		}
+	}
+	return false
+}
+
 // specs/session-timer, Requirement "Suspend Is Time Away", Scenario
 // "Short suspend does not credit".
 func TestShortSuspendDoesNotCredit(t *testing.T) {
@@ -126,10 +135,38 @@ func TestShortSuspendDoesNotCredit(t *testing.T) {
 	s := startedFocus(now, 12*time.Minute)
 
 	resumeAt := now.Add(90 * time.Second)
-	next, _ := Apply(s, EventSuspended{From: now, To: resumeAt}, resumeAt)
+	next, effects := Apply(s, EventSuspended{From: now, To: resumeAt}, resumeAt)
 
 	if next.ElapsedInPhase != 12*time.Minute {
 		t.Fatalf("elapsed = %s, want unchanged 12m after a 90s suspend", next.ElapsedInPhase)
+	}
+	if !hasNotify(effects) {
+		t.Fatal("want EffectNotify: elapsed did not advance, so the deadline moved")
+	}
+}
+
+// specs/daemon-control, Requirement "Change Notification", Scenario
+// "Short suspend republishes the deadline".
+func TestShortSuspendRepublishesDeadline(t *testing.T) {
+	now := time.Date(2026, 9, 14, 9, 0, 0, 0, time.UTC)
+	s := startedFocus(now, 12*time.Minute)
+
+	resumeAt := now.Add(90 * time.Second)
+	next, effects := Apply(s, EventSuspended{From: now, To: resumeAt}, resumeAt)
+
+	if !hasNotify(effects) {
+		t.Fatal("want EffectNotify so PhaseEndsAt is recomputed on resume")
+	}
+
+	got := resumeAt.Add(next.Remaining())
+	want := resumeAt.Add(testDurations().Focus - 12*time.Minute)
+	if !got.Equal(want) {
+		t.Fatalf("republished deadline = %s, want %s", got, want)
+	}
+
+	stale := now.Add(testDurations().Focus - 12*time.Minute)
+	if got.Equal(stale) {
+		t.Fatal("deadline did not move: a client would stay 90s ahead of the daemon")
 	}
 }
 

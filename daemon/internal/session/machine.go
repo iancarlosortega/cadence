@@ -131,11 +131,14 @@ func applySuspend(s State, ev EventSuspended) (State, []Effect) {
 		return creditBreak(s, ev.To)
 	}
 
-	// Short suspend: ordinary idle, elapsed does not advance. Still
-	// persisted so the on-disk LastObserved reflects the resume instant.
+	// Declining to charge the suspend moves the phase deadline, so clients
+	// counting from the published PhaseEndsAt must be told (specs/daemon-control).
 	ns := s
 	ns.LastObserved = ev.To
-	return ns, []Effect{EffectPersist{Reason: "resumed from short suspend"}}
+	return ns, []Effect{
+		EffectPersist{Reason: "resumed from short suspend"},
+		EffectNotify{Reason: "resumed from short suspend"},
+	}
 }
 
 // creditBreak resets to a fresh focus phase, as if the user had just taken
