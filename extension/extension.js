@@ -17,7 +17,8 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
-import {computeDisplay, menuSensitivity, DISCONNECTED} from './render.js';
+import {computeDisplay, menuSensitivity, shouldShowOverlay, DISCONNECTED} from './render.js';
+import {OverlayController} from './overlay.js';
 
 const BUS_NAME = 'dev.ian.Cadence';
 const OBJECT_PATH = '/dev/ian/Cadence';
@@ -193,6 +194,11 @@ export default class CadenceExtension extends Extension {
     enable() {
         this._tickId = 0;
         this._schemeId = 0;
+        this._monitorsId = 0;
+        this._suppressed = false;
+        this._wasBreak = false;
+
+        this._overlay = new OverlayController(() => this._client?.call('SkipBreak'));
 
         this._indicator = new CadenceIndicator(key => this._onAction(key));
         Main.panel.addToStatusArea(this.uuid, this._indicator);
@@ -203,12 +209,23 @@ export default class CadenceExtension extends Extension {
         this._settings = St.Settings.get();
         this._schemeId = this._settings.connect(
             'notify::color-scheme', () => this._render());
+        this._monitorsId = Main.layoutManager.connect(
+            'monitors-changed', () => this._onMonitorsChanged());
 
         this._render();
     }
 
     disable() {
+        // Overlay first: it is the only thing here that can cover the screen,
+        // so it must come down even if a later teardown step throws.
+        this._overlay?.destroy();
+        this._overlay = null;
+
         this._stopTick();
+
+        if (this._monitorsId)
+            Main.layoutManager.disconnect(this._monitorsId);
+        this._monitorsId = 0;
 
         if (this._schemeId && this._settings)
             this._settings.disconnect(this._schemeId);
@@ -234,8 +251,22 @@ export default class CadenceExtension extends Extension {
         this._client?.call(method);
     }
 
+    _onMonitorsChanged() {
+        if (this._overlay?.visible)
+            this._overlay.show(Main.layoutManager.primaryMonitor);
+    }
+
     _onStateChanged() {
         const s = this._client.state;
+
+        // Suppression is decided once, at the break edge, so it cannot flicker
+        // as fullscreen toggles (specs/break-overlay, Fullscreen Suppression).
+        const isBreak = s.available && s.sessionActive && s.phase === 'break';
+        if (isBreak && !this._wasBreak)
+            this._suppressed = Main.layoutManager.primaryMonitor.inFullscreen;
+        else if (!isBreak)
+            this._suppressed = false;
+        this._wasBreak = isBreak;
         if (s.available && s.sessionActive && !s.paused)
             this._startTick();
         else
@@ -264,9 +295,17 @@ export default class CadenceExtension extends Extension {
         const state = this._client.state;
         const now = Math.floor(Date.now() / 1000);
         const dark = this._settings?.colorScheme === St.SystemColorScheme.PREFER_DARK;
+        const display = computeDisplay(state, now);
         this._indicator.render(
-            computeDisplay(state, now),
+            display,
             menuSensitivity(state),
             dark ? 'cadence-warning-dark' : 'cadence-warning-light');
+
+        if (shouldShowOverlay(state, now, this._suppressed)) {
+            this._overlay?.show(Main.layoutManager.primaryMonitor);
+            this._overlay?.setRemaining(display.label);
+        } else {
+            this._overlay?.hide();
+        }
     }
 }

@@ -22,3 +22,44 @@
     color: #8f5300;
     font-weight: bold;
 }
+
+/* Break overlay. Two themes again, because the overlay sits over whatever the
+ * user was looking at and must stay readable in both. */
+
+.cadence-overlay {
+    background-color: rgba(0, 0, 0, 0.88);
+}
+
+.cadence-overlay-box {
+    spacing: 1.2em;
+}
+
+.cadence-overlay-heading {
+    font-size: 3em;
+    font-weight: bold;
+    color: #ffffff;
+}
+
+.cadence-overlay-remaining {
+    font-size: 5em;
+    font-weight: bold;
+    color: #ffb454;
+}
+
+.cadence-overlay-skip {
+    padding: 0.6em 1.4em;
+    border-radius: 999px;
+    background-color: rgba(255, 255, 255, 0.12);
+    color: #ffffff;
+}
+
+.cadence-overlay-skip:hover {
+    background-color: rgba(255, 255, 255, 0.2);
+}
+
+/* scale_x is driven from 0 to 1 over the hold duration. */
+.cadence-overlay-progress {
+    height: 4px;
+    width: 12em;
+    background-color: #ffb454;
+}

@@ -10,6 +10,7 @@ import {
     computeDisplay,
     formatMMSS,
     menuSensitivity,
+    shouldShowOverlay,
     DISCONNECTED,
     WARNING_THRESHOLD_SECONDS,
 } from './render.js';
@@ -48,6 +49,12 @@ check('disconnected is dimmed',
 
 check('inactive session is dimmed',
     computeDisplay(active({sessionActive: false}), NOW),
+    {dimmed: true, label: '', warning: false});
+
+// DISCONNECTED clears available and sessionActive together, so the test above
+// passes even if the availability check is deleted. This isolates it.
+check('unavailable alone is enough to dim',
+    computeDisplay(active({available: false}), NOW),
     {dimmed: true, label: '', warning: false});
 
 check('active focus counts down from PhaseEndsAt',
@@ -104,6 +111,58 @@ check('skip only offered during break',
 check('menu with daemon up but no session',
     menuSensitivity({...DISCONNECTED, available: true}),
     {start: true, stop: false, pause: false, resume: false, skip: false});
+
+// specs/break-overlay — the predicate carries three of the four Self-Owned
+// Exit paths, so these are safety tests, not cosmetics.
+
+const onBreak = (over = {}) => ({
+    available: true,
+    sessionActive: true,
+    phase: 'break',
+    phaseEndsAt: NOW + 300,
+    remainingSeconds: 300,
+    paused: false,
+    tier: 'T0',
+    ...over,
+});
+
+check('overlay shows during an unsuppressed break',
+    shouldShowOverlay(onBreak(), NOW, false), true);
+
+check('suppressed break shows nothing',
+    shouldShowOverlay(onBreak(), NOW, true), false);
+
+// Exit path 2: the phase left break.
+check('focus shows nothing',
+    shouldShowOverlay(onBreak({phase: 'focus'}), NOW, false), false);
+
+// Exit path 3: the daemon went away. This is the F3 path — if it regresses,
+// a vanished daemon leaves the screen covered.
+check('unavailable daemon shows nothing',
+    shouldShowOverlay(DISCONNECTED, NOW, false), false);
+
+// DISCONNECTED clears available AND sessionActive together, so the check above
+// passes even if the availability test is deleted. This isolates it: a state
+// that still looks like a live break but is not available must not show.
+check('unavailable alone is enough to hide, even mid-break',
+    shouldShowOverlay(onBreak({available: false}), NOW, false), false);
+
+check('daemon up but no session shows nothing',
+    shouldShowOverlay(onBreak({sessionActive: false}), NOW, false), false);
+
+// Exit path 1: the locally derived remainder reached zero, with no property
+// change needed.
+check('zero remaining shows nothing without any property change',
+    shouldShowOverlay(onBreak({phaseEndsAt: NOW}), NOW, false), false);
+
+check('one second left still shows',
+    shouldShowOverlay(onBreak({phaseEndsAt: NOW + 1}), NOW, false), true);
+
+check('paused break with time left still shows',
+    shouldShowOverlay(onBreak({paused: true, phaseEndsAt: 0, remainingSeconds: 42}), NOW, false), true);
+
+check('paused break with nothing left shows nothing',
+    shouldShowOverlay(onBreak({paused: true, phaseEndsAt: 0, remainingSeconds: 0}), NOW, false), false);
 
 if (failures > 0) {
     print(`\n${failures} check(s) failed`);

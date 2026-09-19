@@ -7,6 +7,7 @@
  */
 
 export const WARNING_THRESHOLD_SECONDS = 120;
+export const HOLD_TO_SKIP_SECONDS = 3;
 
 export const DISCONNECTED = Object.freeze({
     available: false,
@@ -55,4 +56,25 @@ export function menuSensitivity(state) {
         resume: live && state.paused,
         skip: live && state.phase === 'break',
     };
+}
+
+/* Whether the break overlay should be covering the screen.
+ *
+ * Three of the four dismissal paths in specs/break-overlay "Self-Owned Exit"
+ * reduce to this returning false: the derived remainder reaching zero, the
+ * phase leaving break, and the daemon going away. The fourth, disable(), is
+ * structural. suppressed is decided once at the break edge by the caller, so
+ * this stays pure and does not re-evaluate fullscreen every tick.
+ */
+export function shouldShowOverlay(state, nowSeconds, suppressed) {
+    if (suppressed)
+        return false;
+    if (!state.available || !state.sessionActive)
+        return false;
+    if (state.phase !== 'break')
+        return false;
+    if (state.paused)
+        return state.remainingSeconds > 0;
+
+    return state.phaseEndsAt - nowSeconds > 0;
 }

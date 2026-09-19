@@ -1,0 +1,267 @@
+change: m3-break-overlay
+project: cadence
+created: 2026-09-18
+artifact_store: openspec
+execution_mode: interactive
+delivery_strategy: single-pr
+chain_strategy: null
+delivery_note: >-
+  Preflight carried forward from this session: interactive pace, openspec artifacts, single-pr
+  delivery. Commit and push remain separate human decisions.
+
+summary: >-
+  M3 — a full-screen break overlay on the primary monitor with hold-to-skip. Consumer-only: SkipBreak
+  already exists in the daemon. No modal grab by product decision, so the overlay blocks mouse input
+  but leaves the keyboard free. Suppressed for the whole break if the primary monitor is fullscreen
+  when it starts. The overlay owns its own exit so a vanished daemon cannot leave the screen covered.
+
+phases:
+  explore:
+    state: done
+    artifact: openspec/changes/m3-break-overlay/exploration.md
+  research:
+    state: done-informally
+    artifact: null
+    note: >-
+      A documentation research pass was run, then checked against the Shell 48.8 source extracted
+      from libshell-16.so on this machine. THREE of its claims were wrong and are corrected in the
+      exploration: addTopChrome() does exist; pushModal DOES auto-release its grab when the actor is
+      destroyed; and Monitor.inFullscreen is confirmed rather than uncertain. The middle correction
+      materially changed the risk profile of this milestone. Verify library behaviour in source
+      before designing safety around it.
+  proposal:
+    state: done
+    artifact: openspec/changes/m3-break-overlay/proposal.md
+    capabilities_new: [break-overlay]
+    capabilities_modified: []
+  specs:
+    state: done
+    artifact: openspec/changes/m3-break-overlay/specs/
+    files:
+      - specs/break-overlay/spec.md
+    delta_sections: [NEW]
+    requirements: 6
+    scenarios: 15
+    word_count: 912
+    note: >-
+      New capability, so the whole spec is the delta. Two requirements carry the milestone's real
+      risk. Self-Owned Exit lists four dismissal paths and states explicitly that the overlay MUST
+      NOT depend on the daemon to end it, with a scenario for the daemon vanishing mid-overlay — that
+      scenario exists because F3 proved it can. Overlay Presence states the no-modal-grab decision as
+      a prohibition with a scenario asserting keyboard switching still works, so a later change
+      cannot quietly add a grab and call it an improvement.
+      Hold To Skip also forbids the overlay ending the break itself: it requests SkipBreak and waits
+      for the resulting property change, which keeps invariant I1 intact on the one control that
+      would be most tempting to shortcut.
+  design:
+    state: done
+    artifact: openspec/changes/m3-break-overlay/design.md
+    decisions: 6
+    threat_matrix: not-applicable
+    word_count: 1114
+    note: >-
+      Decision 1 makes three of the four Self-Owned Exit paths unit-testable without a Shell, because
+      the remainder reaching zero, the phase leaving break, and the daemon going away all reduce to
+      one pure predicate returning false. Decision 4 destroys the actor rather than hiding it, since
+      _trackActor untracks chrome on destroy — a hidden actor would leave an input region registered
+      for something invisible, which is a plausible way to end up with a screen area that silently
+      eats clicks. Decision 5 has the hold NOT dismiss the overlay itself: it calls SkipBreak and
+      waits for the daemon's property change, keeping invariant I1 intact at the one control where
+      shortcutting it would be most tempting.
+    convergence_note: >-
+      Every dismissal path converges on the same predicate returning false. There is one way the
+      overlay comes down, reached four ways — which is why a vanished daemon cannot leave the screen
+      covered.
+  tasks:
+    state: done
+    artifact: openspec/changes/m3-break-overlay/tasks.md
+    phases: 6
+    task_count: 37
+    review_forecast:
+      estimated_changed_lines: "~330"
+      budget_risk: Medium
+      chained_prs_recommended: false
+      chain_strategy: null
+      decision_needed_before_apply: false
+      guard_note: >-
+        M2 forecast 340-390 on a comparable GJS milestone and came in at 522, a 35% miss. This
+        estimate is deliberately generous and still leaves only ~70 lines of headroom under the 400
+        budget. If the implementation crosses 400 the Review Workload Guard MUST stop before apply
+        and require a recorded size:exception — single-pr does not permit a silent split. Task 5.1 is
+        the designated drop-first item, being the only one not tied to a spec scenario.
+    note: >-
+      Two mutation checks, both on the predicate. 6.3 is the important one: making the predicate
+      ignore `available` must turn the F3 test red, because that is the path by which a vanished
+      daemon fails to free the screen. 6.11 is flagged to run first among the live checks — if a
+      vanished daemon can leave the screen covered, nothing else about this milestone matters.
+      Task 6.7 asserts Alt+Tab still works while covered. That is deliberate per product decision P1
+      and is recorded as a regression if it ever stops, so a later change cannot add a modal grab and
+      present it as an improvement.
+  apply:
+    state: done
+    artifact: openspec/changes/m3-break-overlay/apply-progress.md
+    tasks_complete: 41
+    tasks_total: 41
+    changed_lines: 329
+    forecast_accuracy: "forecast ~330, actual 329 — within one line, after M2 missed by 35%"
+    runtime_attempt: "settled state=complete on attempt 1, inside the 400-line budget, no size:exception needed"
+    test_results: "28/28 render checks; three mutation checks fail correctly; daemon five packages green and untouched"
+    open_tasks: >-
+      6.6 to 6.13, all live and needing a logout: coverage and click absorption, Alt+Tab still
+      working, hold completing, release cancelling, natural end, the F3 check, fullscreen
+      suppression, and teardown while covered. Runbook section 3 puts the F3 check first.
+    corrections:
+      - >-
+        Task 6.3's mutation check was invalid TWICE. First the mutation hit the wrong function: the
+        condition "if (!state.available || !state.sessionActive)" appears in both computeDisplay and
+        shouldShowOverlay, and a first-occurrence string replace silently mutated computeDisplay. The
+        check reported nothing and looked like a pass.
+      - >-
+        Second, once aimed correctly it still did not fail, because test 5.4 uses DISCONNECTED, which
+        clears available and sessionActive together — the F3 safety test was passing for the wrong
+        reason. Fixed with an isolating case, available false on an otherwise live break. The same
+        weakness existed in M2's computeDisplay test and was closed the same way, since this change's
+        own mutation check exposed it.
+  verify:
+    state: done
+    artifact: openspec/changes/m3-break-overlay/verify-report.md
+    verdict: pass
+    requirements: "6/6"
+    scenarios: "15/15"
+    blockers: 0
+    critical_findings: 0
+    warnings: 3
+    verified_on: "GNOME Shell 48.8 Wayland, across several logout cycles, 2026-09-18"
+    partial:
+      - >-
+        Monitor Changes is the one requirement resting on code inspection rather than observation:
+        a single-monitor session, so the monitors-changed handler has never run against a real
+        configuration change.
+    warning_notes:
+      - >-
+        Four presentation defects reached a human because the test suite cannot see actor geometry,
+        scale or alignment. Future overlay work should budget for eyes on a screen.
+      - >-
+        Monitor Changes not exercised — single-monitor session.
+      - >-
+        A logout was wasted on a stale install; the runbook now opens with make install-extension
+        and a diff that must print nothing.
+    defects_found_and_fixed:
+      - "content top-left: plain St.Widget has no layout manager; fixed with Clutter.BinLayout"
+      - "progress bar full at rest: scale_x defaults to 1, never zeroed at construction"
+      - "countdown off-centre: St.Label defaults to ActorAlign.FILL; every child now sets x_align"
+      - >-
+        hold completed before the bar filled: GLib.timeout_add_seconds coalesces to second
+        boundaries; switched to timeout_add so timer and animation share one millisecond value
+    investigated_not_defects:
+      - >-
+        Hold feels longer than 3s — no defect found; resolved as a product decision to keep 3s
+        because the friction is the point. Perceived time is 3s plus the daemon round trip, which is
+        design Decision 5 and was not traded away.
+      - >-
+        Panel amber during break — investigated twice, resolved by correlated observation: while the
+        overlay was on screen, which only happens when phase is break, the panel read white.
+  archive:
+    state: done
+    artifact: openspec/changes/archive/2026-09-18-m3-break-overlay/archive-report.md
+    archived: 2026-09-18
+    specs_merged:
+      - target: openspec/specs/break-overlay/spec.md
+        capability: break-overlay
+        delta: NEW
+        destructive: false
+        requirements: 6
+        scenarios: 15
+        note: >-
+          New capability, copied whole. Nothing modified or removed; panel-indicator untouched.
+          Checked for stale in-flight notes before merging — none present.
+    carried_forward: [F2, "Monitor Changes PARTIAL — never exercised on a multi-monitor session"]
+
+relationships:
+  dependsOn:
+    - change: m2-gnome-extension
+      why: extends the same extension; overlay reuses CadenceClient and the 1s tick
+  supersedes: []
+  amends: []
+  conflictsWith: []
+  sameDomainActiveChanges: []
+
+product_decisions: confirmed
+
+resolved_product_decisions:
+  - id: P1
+    question: How much should the break overlay block?
+    raised_by: exploration Decision 2
+    resolved: 2026-09-18
+    decision: visual-and-mouse-no-modal
+    answer: >-
+      addTopChrome only, no pushModal. The overlay covers the primary monitor above all windows and
+      absorbs mouse clicks, but Alt+Tab, Super and workspace switching keep working.
+    rationale: >-
+      A nudge rather than a cage, which is the honest level for a personal stand-up reminder the user
+      can always overrule. It also deletes the entire trapping risk class: no grab to leak, no
+      ActionMode gating rescue shortcuts, and no popModal throwing on a double teardown.
+  - id: P2
+    question: What should the overlay do when the primary monitor is in fullscreen?
+    raised_by: exploration Decision 4
+    resolved: 2026-09-18
+    decision: suppress-entirely-for-that-break
+    answer: >-
+      Evaluate Main.layoutManager.primaryMonitor.inFullscreen once, when the break begins. If
+      fullscreen, no overlay for that break. The daemon still runs the break and the panel still
+      shows it.
+    rationale: >-
+      A tool that covers the screen mid video call is a tool that gets uninstalled. Evaluated once
+      rather than continuously so it cannot appear partway through a call or flicker as fullscreen
+      toggles. The rejected alternative — re-showing for the remaining time after fullscreen ends —
+      surfaces a nearly expired break at an arbitrary moment and needs more state.
+
+resolved_technical_decisions:
+  - id: D1
+    question: New capability or extend panel-indicator
+    resolved: 2026-09-18
+    decision: new-capability
+    answer: >-
+      A new break-overlay capability. An overlay is a different surface with different requirements,
+      and folding it into a capability named for a panel indicator would make that name a lie.
+  - id: D2
+    question: Who ends the overlay
+    resolved: 2026-09-18
+    decision: overlay-owns-its-exit
+    answer: >-
+      Four independent dismissal paths: the locally computed remainder reaching zero, a phase change
+      away from break, the daemon's name leaving the bus, and disable(). Invariant I1 from M2 applied
+      where it has consequences — F3 proved the daemon can vanish, and an overlay waiting on a dead
+      daemon is a covered screen with no exit.
+  - id: D3
+    question: Where visibility logic lives
+    resolved: 2026-09-18
+    decision: pure-predicate-in-render
+    answer: >-
+      shouldShowOverlay(state, nowSeconds, suppressed) in render.js beside computeDisplay, so it is
+      unit-testable outside the Shell. overlay.js holds only actor construction and lifecycle.
+
+verified_facts:
+  source_of_truth: "Shell 48.8 JS extracted from /usr/lib64/gnome-shell/libshell-16.so"
+  addChrome: "places the actor BELOW global.top_window_group, i.e. under normal windows"
+  addTopChrome: "exists; places at the top of uiGroup, above windows — what an overlay needs"
+  chrome_defaults: "trackFullscreen false, affectsStruts false, affectsInputRegion true"
+  in_fullscreen: "Monitor.inFullscreen = global.display.get_monitor_in_fullscreen(this.index)"
+  push_modal_returns: "a Clutter.Grab from global.stage.grab(actor)"
+  push_modal_auto_release: "connects actor 'destroy' and calls popModal(grab) from it"
+  pop_modal_double_release: "throws Error('incorrect pop')"
+  track_actor_cleanup: "_trackActor untracks chrome on the actor's destroy signal"
+  st_settings: "exposes enable-animations and slow-down-factor"
+  skip_break_semantics: "no-op unless active and phase is break; resets to focus with elapsed 0"
+
+risks:
+  - Overlay outliving the break; mitigated by four independent dismissal paths.
+  - Dangling hold timer or transition; cleared on release, leave and teardown.
+  - Not verifiable without a session cycle, as with M2; needs a runbook.
+
+notes:
+  - SDD sub-agent dispatch is refused in this runtime, so all phases run inline, as in M1 and M2.
+  - >-
+    Both product decisions came back conservative, which materially simplified the change: no modal
+    grab removes the trapping risk class entirely, and once-at-break-start suppression removes a
+    state machine.
