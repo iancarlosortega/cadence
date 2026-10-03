@@ -28,12 +28,6 @@ const tickInterval = 5 * time.Second
 // (design.md, Decision "Persisted quantity").
 const heartbeatInterval = 60 * time.Second
 
-// fixedT0Tier is M1's stub: real tier detection is M5 (PipeWire, the
-// ScreenCast portal, camera).
-type fixedT0Tier struct{}
-
-func (fixedT0Tier) CurrentTier() session.Tier { return session.TierT0 }
-
 func main() {
 	if err := run(); err != nil {
 		log.Fatalf("cadenced: %v", err)
@@ -79,8 +73,9 @@ func run() error {
 	defer conn.Close()
 
 	idle := dbusapi.NewMutterIdleSource(conn)
+	tier := dbusapi.NewTierDetector(conn, "/proc", "pw-dump")
 
-	svc, err := dbusapi.New(conn, initial, st, clock, fixedT0Tier{}, idle)
+	svc, err := dbusapi.New(conn, initial, st, clock, tier, idle)
 	if err != nil {
 		return err
 	}

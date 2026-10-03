@@ -83,6 +83,24 @@ check('no warning during break',
     computeDisplay(active({phase: 'break', phaseEndsAt: NOW + 60}), NOW).warning,
     false);
 
+// specs/panel-indicator, "Break Warning": no warning while presenting, since
+// no break will start; T1 and T2 still get it because a break will.
+check('no warning in focus at 60s under T3',
+    computeDisplay(active({tier: 'T3', phaseEndsAt: NOW + 60}), NOW).warning,
+    false);
+
+check('warning returns under T2',
+    computeDisplay(active({tier: 'T2', phaseEndsAt: NOW + 60}), NOW).warning,
+    true);
+
+check('warning returns under T1',
+    computeDisplay(active({tier: 'T1', phaseEndsAt: NOW + 60}), NOW).warning,
+    true);
+
+check('T3 does not change the label, only the warning',
+    computeDisplay(active({tier: 'T3', phaseEndsAt: NOW + 60}), NOW).label,
+    '1:00');
+
 // Paused publishes PhaseEndsAt as 0; reading it would render a huge negative.
 check('paused reads RemainingSeconds, not PhaseEndsAt',
     computeDisplay(active({paused: true, phaseEndsAt: 0, remainingSeconds: 720}), NOW),

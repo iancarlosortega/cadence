@@ -41,6 +41,10 @@ above. Because the correct `PhaseEndsAt` would otherwise advance continuously fo
 the daemon MUST satisfy this requirement by publishing the window's boundaries and freezing the
 deadline between them, per "Idle Publication" — not by republishing a moving deadline per tick.
 
+A tick on which only the tier changes is a change to a published value and MUST emit. Clients act
+on `Tier` without waiting for a transition: the panel withholds its warning while presenting
+(`panel-indicator` "Break Warning").
+
 #### Scenario: No per-second traffic
 
 - GIVEN an active unpaused `focus`
@@ -70,6 +74,13 @@ deadline between them, per "Idle Publication" — not by republishing a moving d
 - WHEN any sequence of suspends, idle windows and phase transitions occurs
 - THEN the client's derived remaining time equals the daemon's elapsed-derived remaining time
 - AND the two do not diverge by a constant offset
+
+#### Scenario: A tier change alone emits once
+
+- GIVEN an active unpaused `focus` session at tier `T0`
+- WHEN screen sharing starts and the next tick observes `T3`, with no other change
+- THEN exactly one `PropertiesChanged` is emitted, carrying `Tier`
+- AND no `PropertiesChanged` is emitted by the following ticks while the tier stays `T3`
 
 ### Requirement: Idle Publication
 

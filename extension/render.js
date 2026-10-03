@@ -46,11 +46,16 @@ export function computeDisplay(state, nowSeconds) {
         };
     }
 
+    // No warning while presenting (specs/panel-indicator, "Break Warning"):
+    // under T3 the daemon skips the break at the deadline, so there is
+    // nothing to warn about, and an amber flash would be visible to the
+    // audience. T1 and T2 still start a break, so they keep the warning.
     const remaining = Math.max(0, state.phaseEndsAt - nowSeconds);
     return {
         dimmed: false,
         label: formatMMSS(remaining),
-        warning: state.phase === 'focus' && remaining <= WARNING_THRESHOLD_SECONDS,
+        warning: state.phase === 'focus' && state.tier !== 'T3' &&
+            remaining <= WARNING_THRESHOLD_SECONDS,
     };
 }
 

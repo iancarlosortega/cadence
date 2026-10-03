@@ -1,0 +1,129 @@
+change: m5-tier-detection
+project: cadence
+created: 2026-10-03
+artifact_store: hybrid
+execution_mode: auto
+delivery_strategy: exception-ok
+chain_strategy: null
+delivery_note: >-
+  Preflight collected 2026-10-03: automatic pace, both artifact stores. The user is the only
+  developer and commits directly to main, so size:exception applies.
+
+summary: >-
+  Replace the fixedT0Tier stub with real detection of what other people can see (screen share,
+  camera, microphone) and give each tier its break policy.
+
+phases:
+  explore:
+    state: done
+    artifact: openspec/changes/m5-tier-detection/exploration.md
+  research:
+    state: done
+    artifact: openspec/changes/m5-tier-detection/research.md
+    claims: 9
+    unverified: [U1 other apps camera path, U2 screen recorder reads as T3, U3 window vs screen share]
+    lane: tier-signals
+    method: >-
+      Live capture on the user's machine during a real call: PipeWire graph, /dev/video holders and
+      portal/ScreenCast bus state, sampled at rest, mic only, camera on, and screen share.
+  proposal:
+    state: done
+    artifact: openspec/changes/m5-tier-detection/proposal.md
+    capabilities_modified: [session-timer, daemon-control, panel-indicator]
+    capabilities_new: []
+    success_criteria: 8
+  specs:
+    state: done
+    artifact: openspec/changes/m5-tier-detection/specs/
+    requirements_modified: 3
+    requirements_added: 1
+    scenarios: 19
+  design:
+    state: done
+    artifact: openspec/changes/m5-tier-detection/design.md
+    decisions: 9
+  tasks:
+    state: done
+    artifact: openspec/changes/m5-tier-detection/tasks.md
+    phases: 8
+    task_count: 36
+    review_forecast:
+      estimated_changed_lines: "~700"
+      budget_risk: High
+      chained_prs_recommended: false
+      decision_needed_before_apply: false
+      guard: exception-ok, user commits directly to main
+  apply:
+    state: done
+    artifact: openspec/changes/m5-tier-detection/apply-progress.md
+    changed_lines: 1067
+    forecast_accuracy: "~700 forecast, 1067 actual: 52% over. Tests ~55% again; the adapter test file alone is 380 lines."
+  verify:
+    state: done
+    artifact: openspec/changes/m5-tier-detection/verify-report.md
+    verdict: pass_with_warnings
+    requirements: 4/4
+    scenarios: 19/19
+    blockers: 0
+    warnings: 3
+    live_checks: 8/8 passed, none waived
+  archive:
+    state: done
+    artifact: openspec/changes/m5-tier-detection/archive-report.md
+    date: 2026-10-03
+
+product_decisions: confirmed
+
+resolved_product_decisions:
+  - id: P1
+    question: Which tiers ship in M5.
+    resolved: 2026-10-03
+    decision: A
+    label: Detection + T3
+    meaning: >-
+      Real detection for all signals, the Tier publication fix (D1), and T3 silent skip. T2 policy
+      and its corner panel and pill move to M6.
+  - id: P2
+    question: Run a research lane that measures the signals live during a real call before design.
+    resolved: 2026-10-03
+    decision: A
+    label: Yes, research first
+  - id: P3
+    question: >-
+      What happens to T1, which has no observable effect today (the overlay has no sound and the
+      hold is already 3s).
+    resolved: 2026-10-03
+    decision: A
+    label: Collapse T1 into T0
+    meaning: >-
+      The mic is still detected so the Tier property is truthful, but a T1 break behaves exactly
+      like T0.
+
+  - id: P4
+    question: What a T2 (camera) break does in M5, since the T2 policy and its corner panel moved to M6.
+    resolved: 2026-10-03
+    decision: A
+    label: Treat T2 as T0
+    meaning: The overlay shows on camera. T2 is detected and published, but gates nothing until M6.
+  - id: P5
+    question: Whether a local screen recording counts as presenting (research U2).
+    resolved: 2026-10-03
+    decision: A
+    label: Any screencast is T3
+    meaning: >-
+      Any Mutter ScreenCast session, including the GNOME recorder and OBS, silently skips the break.
+
+latent_defects:
+  - id: D1
+    where: "daemon/internal/dbusapi/service.go:198-206 with daemon/internal/session/machine.go applyTick default branch"
+    what: >-
+      A tick whose only change is the tier returns no effects, so Tier is never republished until
+      the next transition. Unreachable while the stub is constant; M5 makes it reachable.
+  - id: D2
+    where: "daemon/internal/session/machine.go:223-237 transitionPhase"
+    what: >-
+      Any non-T0 tier at the focus deadline restarts a full focus block (elapsed zeroed, phase
+      unchanged). That is close to T3 silent skip, and wrong for T2 and T1.
+
+notes:
+  - SDD sub-agent dispatch is refused in this runtime, so phases run inline, as in M1-M4.

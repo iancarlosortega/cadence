@@ -11,9 +11,9 @@ type Clock interface {
 	Now() time.Time
 }
 
-// TierSource reports what other people can currently see. M1 stubs this to
-// always return TierT0; real detection (PipeWire, ScreenCast portal,
-// camera) is M5.
+// TierSource reports what other people can currently see. dbusapi.TierDetector
+// implements it from the compositor, /proc and PipeWire; a signal that cannot
+// be read counts as absent, so the answer can only err toward T0.
 type TierSource interface {
 	CurrentTier() Tier
 }

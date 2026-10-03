@@ -479,3 +479,135 @@ func TestBreakCompletesWhileTheUserIsAway(t *testing.T) {
 		t.Fatalf("phase = %s, want focus — the break must complete while the user is away", next.Phase)
 	}
 }
+
+func hasPersist(effects []Effect) bool {
+	for _, e := range effects {
+		if _, ok := e.(EffectPersist); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// specs/session-timer, Requirement "Tier Gating", Scenarios "T1 starts
+// break" and "T2 starts break". Only a screen share (T3) withholds the
+// break; listening or being on camera does not (design D5, P3/P4).
+func TestT1AndT2StartBreak(t *testing.T) {
+	for _, tier := range []Tier{TierT1, TierT2} {
+		t.Run(string(tier), func(t *testing.T) {
+			now := time.Date(2026, 9, 14, 9, 0, 0, 0, time.UTC)
+			s := startedFocus(now, testDurations().Focus)
+
+			next, effects := Apply(s, EventTick{Tier: tier}, now.Add(time.Second))
+
+			if next.Phase != PhaseBreak {
+				t.Fatalf("phase = %s, want break under tier %s", next.Phase, tier)
+			}
+			if !hasNotify(effects) {
+				t.Fatal("want EffectNotify on the phase transition")
+			}
+		})
+	}
+}
+
+// specs/session-timer, Requirement "Tier Gating", Scenario "T3 skips the
+// break silently".
+func TestT3SkipsBreakSilently(t *testing.T) {
+	now := time.Date(2026, 9, 14, 9, 0, 0, 0, time.UTC)
+	s := startedFocus(now, testDurations().Focus)
+
+	next, _ := Apply(s, EventTick{Tier: TierT3}, now.Add(time.Second))
+
+	if next.Phase != PhaseFocus {
+		t.Fatalf("phase = %s, want focus: a presenter is never interrupted", next.Phase)
+	}
+	if next.ElapsedInPhase != 0 {
+		t.Fatalf("elapsed = %s, want a fresh focus block (0)", next.ElapsedInPhase)
+	}
+}
+
+// specs/session-timer, Requirement "Tier Gating", Scenario "Presenting
+// during a break ends it" (design D5).
+func TestPresentingDuringBreakEndsIt(t *testing.T) {
+	now := time.Date(2026, 9, 14, 9, 0, 0, 0, time.UTC)
+	s := startedFocus(now, 0)
+	s.Phase = PhaseBreak
+	s.ElapsedInPhase = 2 * time.Minute
+
+	next, effects := Apply(s, EventTick{Tier: TierT3}, now.Add(5*time.Second))
+
+	if next.Phase != PhaseFocus {
+		t.Fatalf("phase = %s, want focus", next.Phase)
+	}
+	if next.ElapsedInPhase != 0 {
+		t.Fatalf("elapsed = %s, want 0", next.ElapsedInPhase)
+	}
+	if !hasPersist(effects) || !hasNotify(effects) {
+		t.Fatalf("want Persist and Notify, got %v", effects)
+	}
+}
+
+// Design D5 ordering note: a share that starts on the very tick the focus
+// deadline is reached skips the break rather than starting it for a tick.
+func TestShareStartingAtTheDeadlineSkipsTheBreak(t *testing.T) {
+	now := time.Date(2026, 9, 14, 9, 0, 0, 0, time.UTC)
+	s := startedFocus(now, testDurations().Focus-time.Second)
+	s.Tier = TierT0 // the previous tick saw no share
+
+	next, _ := Apply(s, EventTick{Tier: TierT3}, now.Add(5*time.Second))
+
+	if next.Phase != PhaseFocus || next.ElapsedInPhase != 0 {
+		t.Fatalf("phase=%s elapsed=%s, want a fresh focus block", next.Phase, next.ElapsedInPhase)
+	}
+}
+
+// specs/daemon-control, Requirement "Change Notification", Scenario "A tier
+// change alone emits once" (design D6). A tick whose only change is the tier
+// used to return no effects, so nothing was published.
+func TestTierOnlyChangeNotifies(t *testing.T) {
+	now := time.Date(2026, 9, 14, 9, 0, 0, 0, time.UTC)
+	s := startedFocus(now, 5*time.Minute)
+
+	next, effects := Apply(s, EventTick{Tier: TierT3}, now.Add(5*time.Second))
+
+	if next.Tier != TierT3 {
+		t.Fatalf("tier = %s, want T3", next.Tier)
+	}
+	if len(effects) != 1 || !hasNotify(effects) {
+		t.Fatalf("want exactly one EffectNotify, got %v", effects)
+	}
+	if hasPersist(effects) {
+		t.Fatal("tier is not persisted (design D7): want no EffectPersist")
+	}
+}
+
+// The same change inside an open idle window takes the
+// `if s.Idle { return ns, nil }` path in applyTick.
+func TestTierOnlyChangeNotifiesInsideIdleWindow(t *testing.T) {
+	now := time.Date(2026, 9, 14, 9, 0, 0, 0, time.UTC)
+	s := startedFocus(now, 20*time.Minute)
+	idle := testDurations().IdlePause + time.Minute
+	s, _ = Apply(s, EventTick{IdleFor: idle, Tier: TierT0}, now.Add(time.Minute))
+	if !s.Idle {
+		t.Fatal("setup: idle window should be open")
+	}
+
+	_, effects := Apply(s, EventTick{IdleFor: idle + 5*time.Second, Tier: TierT3}, now.Add(time.Minute+5*time.Second))
+
+	if len(effects) != 1 || !hasNotify(effects) {
+		t.Fatalf("want exactly one EffectNotify, got %v", effects)
+	}
+}
+
+// An unchanged tier adds nothing: the notify is for the edge, not the tick.
+func TestUnchangedTierEmitsNothing(t *testing.T) {
+	now := time.Date(2026, 9, 14, 9, 0, 0, 0, time.UTC)
+	s := startedFocus(now, 5*time.Minute)
+	s.Tier = TierT2
+
+	_, effects := Apply(s, EventTick{Tier: TierT2}, now.Add(5*time.Second))
+
+	if len(effects) != 0 {
+		t.Fatalf("want no effects for an unchanged tier, got %v", effects)
+	}
+}

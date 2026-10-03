@@ -113,3 +113,22 @@ func TestIdleFlagsAreNotPersisted(t *testing.T) {
 		t.Error("IdleCredited survived a save/load round trip: a stale latch can suppress an earned break")
 	}
 }
+
+// Design D7: tier is sampled live and never restored. An old state file that
+// still carries a "tier" key must load without error and yield T0, so a stale
+// T3 cannot suppress a break before the first tick re-samples it.
+func TestStoredTierIsIgnoredOnRestore(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.json")
+	old := `{"active": true, "phase": "focus", "tier": "T3", "last_observed": "2026-09-14T09:00:00Z"}`
+	if err := os.WriteFile(path, []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, found, err := NewFileStore(path).Load()
+	if err != nil || !found {
+		t.Fatalf("Load: found=%v err=%v", found, err)
+	}
+	if got.Tier != session.TierT0 {
+		t.Fatalf("Tier = %q, want T0: tier is not persisted", got.Tier)
+	}
+}

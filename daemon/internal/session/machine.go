@@ -76,13 +76,32 @@ func Apply(s State, e Event, now time.Time) (State, []Effect) {
 		return ns, []Effect{EffectPersist{Reason: "break skipped"}, EffectNotify{Reason: "break skipped"}}
 
 	case EventTick:
-		return applyTick(s, ev, now)
+		ns, effects := applyTick(s, ev, now)
+		// A tier-only change publishes (specs/daemon-control, "Change
+		// Notification": "A tier change alone emits once"; design D6). Doing
+		// it here, once, covers every branch of applyTick, including the
+		// ones that return no effects, rather than patching each. Nothing is
+		// persisted: tier is sampled live (design D7).
+		if ns.Tier != s.Tier && !hasNotifyEffect(effects) {
+			effects = append(effects, EffectNotify{Reason: "tier changed"})
+		}
+		return ns, effects
 
 	case EventSuspended:
 		return applySuspend(s, ev)
 	}
 
 	return s, nil
+}
+
+// hasNotifyEffect reports whether effects already carries a publish.
+func hasNotifyEffect(effects []Effect) bool {
+	for _, e := range effects {
+		if _, ok := e.(EffectNotify); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // applyTick advances the clock by whatever real time passed since
@@ -99,6 +118,21 @@ func applyTick(s State, ev EventTick, now time.Time) (State, []Effect) {
 	ns.Tier = ev.Tier
 
 	switch {
+	// Presenting ends a break in progress, exactly as skipping it does
+	// (specs/session-timer, "Tier Gating": "Presenting during a break ends
+	// it"; design D5). It is the first case so that presenting wins over
+	// every idle rule on the same tick: a break must not outlive a screen
+	// share. It reads the tick's tier, not the stored one, so there is no
+	// one-tick lag.
+	case s.Phase == PhaseBreak && ev.Tier == TierT3:
+		ns.Phase = PhaseFocus
+		ns.ElapsedInPhase = 0
+		ns.LastObserved = now
+		return ns, []Effect{
+			EffectPersist{Reason: "break ended by screen share"},
+			EffectNotify{Reason: "break ended by screen share"},
+		}
+
 	// The latch is the whole reason this case is conditional. ev.IdleFor
 	// grows for as long as the user is away and crediting does not reset
 	// it, so an unconditional credit fires on every tick of the absence
@@ -216,18 +250,16 @@ func creditBreak(s State, at time.Time) (State, []Effect) {
 
 // transitionPhase flips focus<->break once the current phase's duration is
 // exhausted through active ticking. Tier gating (specs/session-timer,
-// "Tier Gating") is consulted here: M1's TierSource is stubbed to always
-// report TierT0, so the break always starts; the T1-T3 policies (silent
-// skip, deferred corner panel, muted overlay) are M5 behavior layered on
-// top of this same decision point.
+// "Tier Gating") is consulted here: only T3 (presenting) withholds the
+// break, and the phase stays focus with a fresh block. T1 and T2 start it
+// like T0 (design D5; product decisions P3/P4): being heard or seen is not a
+// reason to skip a break the user needs.
 func transitionPhase(s State, now time.Time) (State, []Effect) {
 	ns := s
 	if s.Phase == PhaseFocus {
-		if s.Tier == TierT0 {
+		if s.Tier != TierT3 {
 			ns.Phase = PhaseBreak
 		}
-		// Non-T0 tiers: M1 has no adapter that ever reports them, so no
-		// rule is needed yet. A future milestone extends this switch.
 	} else {
 		ns.Phase = PhaseFocus
 	}

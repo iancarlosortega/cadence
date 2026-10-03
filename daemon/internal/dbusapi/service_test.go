@@ -62,6 +62,19 @@ func (s *settableIdle) IdleFor(time.Time) time.Duration { return s.d }
 // A missing session bus is the one honest skip, and it is kept below.
 func newTestServiceWithIdle(t *testing.T, clock session.Clock, idle session.IdleSource) (*Service, *godbus.Conn) {
 	t.Helper()
+	return newTestServiceWithSources(t, clock, idle, fixedTier{})
+}
+
+// settableTier stands in for the tier detector so a test can move the tier
+// between ticks.
+type settableTier struct{ t session.Tier }
+
+func (s *settableTier) CurrentTier() session.Tier { return s.t }
+
+// newTestServiceWithSources is newTestServiceWithIdle with the tier source
+// injectable. See that helper for why the connection is private and nameless.
+func newTestServiceWithSources(t *testing.T, clock session.Clock, idle session.IdleSource, tier session.TierSource) (*Service, *godbus.Conn) {
+	t.Helper()
 	conn, err := godbus.SessionBusPrivate()
 	if err != nil {
 		t.Skipf("no session bus available, skipping D-Bus integration test: %v", err)
@@ -76,7 +89,7 @@ func newTestServiceWithIdle(t *testing.T, clock session.Clock, idle session.Idle
 	}
 
 	initial := session.State{Durations: testDurations(), LastObserved: clock.Now()}
-	svc, err := newService(conn, "", initial, &memStore{}, clock, fixedTier{}, idle)
+	svc, err := newService(conn, "", initial, &memStore{}, clock, tier, idle)
 	if err != nil {
 		t.Fatalf("exporting the test service: %v", err)
 	}
@@ -493,5 +506,107 @@ func TestCountdownDoesNotJumpBackwardsLeavingIdle(t *testing.T) {
 	live := endsAt - clock.Now().Unix() // exactly what the extension computes
 	if live != frozen {
 		t.Fatalf("countdown jumped from %ds frozen to %ds live on leaving idle (PhaseEndsAt=%d); the client must not see the remaining time change across the edge", frozen, live, endsAt)
+	}
+}
+
+// specs/daemon-control, Requirement "Change Notification", Scenario "A tier
+// change alone emits once" (design D6). The tick changes nothing but the
+// tier: no phase edge, no idle window. Before the fix that tick returned no
+// effects, so the extension kept showing a stale tier until something else
+// happened to publish.
+func TestTierChangeAloneEmitsOnce(t *testing.T) {
+	clock := session.NewFakeClock(time.Date(2026, 9, 14, 9, 0, 0, 0, time.UTC))
+	tier := &settableTier{t: session.TierT0}
+	svc, conn := newTestServiceWithSources(t, clock, zeroIdle{}, tier)
+
+	if err := svc.StartSession(); err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	signals := watchSignals(t, conn)
+
+	tier.t = session.TierT3
+	clock.Advance(5 * time.Second)
+	if err := svc.Tick(); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+
+	var sig *godbus.Signal
+	select {
+	case sig = <-signals:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("no PropertiesChanged on a tier-only change")
+	}
+	changed, ok := sig.Body[1].(map[string]godbus.Variant)
+	if !ok {
+		t.Fatalf("signal body[1] = %T, want map[string]dbus.Variant", sig.Body[1])
+	}
+	if v, ok := changed["Tier"]; !ok || v.Value() != string(session.TierT3) {
+		t.Fatalf("Tier = %v (present=%v), want T3 in the signal", v, ok)
+	}
+	// RemainingSeconds is allowed: it is derived from elapsed time, which the
+	// 5s the tick advanced legitimately moved. What must not appear is any
+	// property the tier change did not touch.
+	for _, unchanged := range []string{"SessionActive", "Phase", "Paused", "Idle", "PhaseEndsAt"} {
+		if _, ok := changed[unchanged]; ok {
+			t.Errorf("%s did not change but was republished with the tier", unchanged)
+		}
+	}
+	if n := countFor(signals, 300*time.Millisecond); n != 0 {
+		t.Fatalf("%d extra signals after the tier edge, want 0", n)
+	}
+
+	// The following ticks at the same tier are silent.
+	for i := 0; i < 3; i++ {
+		clock.Advance(5 * time.Second)
+		if err := svc.Tick(); err != nil {
+			t.Fatalf("Tick: %v", err)
+		}
+	}
+	if n := countFor(signals, 500*time.Millisecond); n != 0 {
+		t.Fatalf("ticks at an unchanged tier emitted %d signals, want 0", n)
+	}
+}
+
+// countingTier records how often the tier detector is sampled.
+type countingTier struct{ calls int }
+
+func (c *countingTier) CurrentTier() session.Tier { c.calls++; return session.TierT0 }
+
+// specs/session-timer, Requirement "Tier Gating": "The tier MUST be sampled
+// on every tick while a session is active and not paused. Outside that, the
+// tier is not sampled." Sampling costs a pw-dump spawn and a /proc walk, so
+// an idle daemon must not pay it every tick.
+func TestTierIsSampledOnlyWhileActiveAndUnpaused(t *testing.T) {
+	clock := session.NewFakeClock(time.Date(2026, 9, 14, 9, 0, 0, 0, time.UTC))
+	tier := &countingTier{}
+	svc, _ := newTestServiceWithSources(t, clock, zeroIdle{}, tier)
+
+	tick := func() {
+		t.Helper()
+		clock.Advance(5 * time.Second)
+		if err := svc.Tick(); err != nil {
+			t.Fatalf("Tick: %v", err)
+		}
+	}
+
+	tick()
+	if tier.calls != 0 {
+		t.Fatalf("sampled %d times with no session, want 0", tier.calls)
+	}
+
+	if err := svc.StartSession(); err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	tick()
+	if tier.calls != 1 {
+		t.Fatalf("sampled %d times during an active session tick, want 1", tier.calls)
+	}
+
+	if err := svc.Pause(); err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+	tick()
+	if tier.calls != 1 {
+		t.Fatalf("sampled %d times in total after a paused tick, want still 1", tier.calls)
 	}
 }

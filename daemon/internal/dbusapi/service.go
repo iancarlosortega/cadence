@@ -167,7 +167,20 @@ func (s *Service) SkipBreak() *dbus.Error    { return s.apply(session.EventSkipB
 func (s *Service) Tick() *dbus.Error {
 	now := s.clock.Now()
 	idleFor := s.idle.IdleFor(now)
-	tier := s.tier.CurrentTier()
+
+	// The tier is sampled only while a session is active and not paused
+	// (specs/session-timer, "Tier Gating"). Sampling spawns pw-dump and
+	// walks /proc, and applyTick ignores the result outside that window, so
+	// an idle daemon would pay for it every tick for nothing. The probes
+	// still run outside the mutex: only the check is taken under it.
+	s.mu.Lock()
+	sample := s.state.Active && !s.state.Paused
+	tier := s.state.Tier
+	s.mu.Unlock()
+	if sample {
+		tier = s.tier.CurrentTier()
+	}
+
 	return s.apply(session.EventTick{IdleFor: idleFor, Tier: tier})
 }
 

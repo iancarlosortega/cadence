@@ -23,7 +23,6 @@ type record struct {
 	ElapsedInPhase  time.Duration `json:"elapsed_in_phase_ns"`
 	Paused          bool          `json:"paused"`
 	PausedRemaining time.Duration `json:"paused_remaining_ns"`
-	Tier            session.Tier  `json:"tier"`
 	LastObserved    time.Time     `json:"last_observed"`
 	FocusMinutes    int           `json:"focus_minutes"`
 	BreakMinutes    int           `json:"break_minutes"`
@@ -77,7 +76,6 @@ func (fs *FileStore) Load() (session.State, bool, error) {
 		ElapsedInPhase:  r.ElapsedInPhase,
 		Paused:          r.Paused,
 		PausedRemaining: r.PausedRemaining,
-		Tier:            r.Tier,
 		LastObserved:    r.LastObserved,
 		Durations: session.Durations{
 			Focus:      time.Duration(r.FocusMinutes) * time.Minute,
@@ -86,6 +84,9 @@ func (fs *FileStore) Load() (session.State, bool, error) {
 			IdleCredit: time.Duration(r.IdleCreditMin) * time.Minute,
 		},
 	}
+	// Tier is sampled live, never restored (design D7): a stored T3 would be
+	// wrong until the first tick, and nothing consumes a stored one.
+	s.Tier = session.TierT0
 	return s, true, nil
 }
 
@@ -104,7 +105,6 @@ func (fs *FileStore) Save(s session.State) error {
 		ElapsedInPhase:  s.ElapsedInPhase,
 		Paused:          s.Paused,
 		PausedRemaining: s.PausedRemaining,
-		Tier:            s.Tier,
 		LastObserved:    s.LastObserved,
 		FocusMinutes:    int(s.Durations.Focus.Minutes()),
 		BreakMinutes:    int(s.Durations.Break.Minutes()),

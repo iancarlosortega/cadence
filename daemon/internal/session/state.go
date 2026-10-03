@@ -16,9 +16,9 @@ const (
 )
 
 // Tier describes what other people can currently see (T0-T3, see
-// specs/session-timer). M1 only ever observes TierT0; T1-T3 are defined
-// here so the type is stable across milestones, but no rule in Apply
-// branches on them yet beyond "T0 starts the break".
+// specs/session-timer). It is sampled live each tick and never persisted.
+// The only rule in Apply that branches on it is T3, which withholds the
+// break; T1 and T2 are published but behave as T0.
 type Tier string
 
 const (
