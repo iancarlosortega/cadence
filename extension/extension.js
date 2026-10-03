@@ -37,6 +37,7 @@ const IFACE_XML = `
     <property name="RemainingSeconds" type="x" access="read"/>
     <property name="Paused" type="b" access="read"/>
     <property name="Tier" type="s" access="read"/>
+    <property name="Idle" type="b" access="read"/>
   </interface>
 </node>`;
 
@@ -127,6 +128,7 @@ class CadenceClient {
             remainingSeconds: Number(p.RemainingSeconds ?? 0),
             paused: !!p.Paused,
             tier: p.Tier ?? 'T0',
+            idle: !!p.Idle,
         };
         this._onChanged();
     }

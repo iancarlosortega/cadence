@@ -1,10 +1,6 @@
-# daemon-control Specification
+# daemon-control Specification (delta)
 
-## Purpose
-
-D-Bus interface and CLI for controlling a session.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Control Surface
 
@@ -70,6 +66,13 @@ deadline between them, per "Idle Publication" — not by republishing a moving d
 - WHEN any sequence of suspends, idle windows and phase transitions occurs
 - THEN the client's derived remaining time equals the daemon's elapsed-derived remaining time
 - AND the two do not diverge by a constant offset
+
+The general statement of this requirement is now discharged for every reachable path. The note
+carried here since `fix-suspend-deadline-republish` — that idle gating was unimplemented and left
+the requirement ungoverned — is removed by this change, which makes those paths reachable and
+governs them.
+
+## ADDED Requirements
 
 ### Requirement: Idle Publication
 

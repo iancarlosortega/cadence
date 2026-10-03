@@ -45,6 +45,11 @@ func Apply(s State, e Event, now time.Time) (State, []Effect) {
 		ns.Paused = true
 		ns.PausedRemaining = s.Remaining()
 		ns.LastObserved = now
+		// Paused outranks Idle, so a window open at this instant closes
+		// here rather than publishing both frozen conditions at once
+		// (specs/daemon-control, "Idle Publication").
+		ns.Idle = false
+		ns.IdleCredited = false
 		return ns, []Effect{EffectPersist{Reason: "paused"}, EffectNotify{Reason: "paused"}}
 
 	case EventResume:
@@ -94,17 +99,64 @@ func applyTick(s State, ev EventTick, now time.Time) (State, []Effect) {
 	ns.Tier = ev.Tier
 
 	switch {
-	case ev.IdleFor >= s.Durations.IdleCredit:
-		return creditBreak(s, now)
+	// The latch is the whole reason this case is conditional. ev.IdleFor
+	// grows for as long as the user is away and crediting does not reset
+	// it, so an unconditional credit fires on every tick of the absence
+	// (specs/session-timer, "Idle Credit": a single idle window credits at
+	// most one break).
+	case ev.IdleFor >= s.Durations.IdleCredit && !s.IdleCredited:
+		credited, effects := creditBreak(s, now)
+		credited.Idle = true
+		credited.IdleCredited = true
+		return credited, effects
 
-	case ev.IdleFor >= s.Durations.IdlePause:
-		// Idle beyond the pause threshold but short of the credit
-		// threshold: elapsed time does not advance, nothing observable
-		// changed, so no effect is emitted.
+	// Focus only. A break is time away from the desk by design, so going
+	// idle during one is the user doing exactly what it asked: the break
+	// must keep running on wall-clock time and finish while they are gone.
+	// Freezing it would leave the remainder owed on their return, so a
+	// break taken properly would be the one that never completes
+	// (specs/session-timer, "Idle Credit").
+	case ev.IdleFor >= s.Durations.IdlePause && s.Phase == PhaseFocus:
+		// Elapsed time does not advance here, which moves the effective
+		// deadline for as long as the window stays open. The window's
+		// edges are therefore observable and are published; the ticks
+		// between them are not (specs/daemon-control, "Change
+		// Notification"). Emitting per tick here would be the per-second
+		// heartbeat that requirement forbids.
 		ns.LastObserved = now
-		return ns, nil
+		if s.Idle {
+			return ns, nil
+		}
+		ns.Idle = true
+		return ns, []Effect{
+			EffectPersist{Reason: "idle window opened"},
+			EffectNotify{Reason: "idle window opened"},
+		}
 
 	default:
+		// Spend the latch only on real activity. Reaching here while
+		// still idle means the phase is a break, which does not freeze —
+		// the absence is not over, so its credit must not be re-armed.
+		// Clearing on activity rather than only on the window-close edge
+		// also covers a break credited by applySuspend, which sets the
+		// latch without opening a window.
+		if ev.IdleFor < s.Durations.IdlePause {
+			ns.IdleCredited = false
+		}
+
+		if s.Idle {
+			// Closing edge. The gap since the last observation was idle
+			// time and is not charged; the phase resumes from this
+			// instant with the remainder it was frozen at
+			// (specs/session-timer, "Idle Credit").
+			ns.Idle = false
+			ns.LastObserved = now
+			return ns, []Effect{
+				EffectPersist{Reason: "idle window closed"},
+				EffectNotify{Reason: "idle window closed"},
+			}
+		}
+
 		delta := max(now.Sub(s.LastObserved), 0)
 		ns.ElapsedInPhase = s.ElapsedInPhase + delta
 		ns.LastObserved = now
@@ -128,7 +180,15 @@ func applySuspend(s State, ev EventSuspended) (State, []Effect) {
 	duration := max(ev.To.Sub(ev.From), 0)
 
 	if duration >= s.Durations.IdleCredit {
-		return creditBreak(s, ev.To)
+		credited, effects := creditBreak(s, ev.To)
+		// The same absence may also be visible to the idle source on the
+		// next tick. Latching here means it is credited once whether or
+		// not the compositor's idle reading accrues across suspend, which
+		// is undocumented upstream (design.md, Decision 2). Idle stays
+		// false: the user may well be back at the keyboard on resume, and
+		// the next tick decides that from a real reading.
+		credited.IdleCredited = true
+		return credited, effects
 	}
 
 	// Declining to charge the suspend moves the phase deadline, so clients

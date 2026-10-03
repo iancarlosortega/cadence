@@ -80,3 +80,36 @@ func TestSaveWritesNoPartialFileOnFailure(t *testing.T) {
 		t.Fatalf("want exactly one file (no leftover temp files), got %d: %v", len(entries), entries)
 	}
 }
+
+// design.md, Decision 8: the idle flags are runtime state derived from a
+// live compositor reading, and are re-derived within one tick of startup.
+// Persisting the latch would let it outlive the absence that set it and
+// suppress a break the user had earned.
+func TestIdleFlagsAreNotPersisted(t *testing.T) {
+	dir := t.TempDir()
+	fs := NewFileStore(filepath.Join(dir, "session.json"))
+
+	saved := session.State{
+		Active:         true,
+		Phase:          session.PhaseFocus,
+		ElapsedInPhase: 30 * time.Minute,
+		Idle:           true,
+		IdleCredited:   true,
+		Tier:           session.TierT0,
+		LastObserved:   time.Date(2026, 9, 14, 9, 0, 0, 0, time.UTC),
+	}
+	if err := fs.Save(saved); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	got, found, err := NewFileStore(filepath.Join(dir, "session.json")).Load()
+	if err != nil || !found {
+		t.Fatalf("Load: found=%v err=%v", found, err)
+	}
+	if got.Idle {
+		t.Error("Idle survived a save/load round trip, want it derived at runtime")
+	}
+	if got.IdleCredited {
+		t.Error("IdleCredited survived a save/load round trip: a stale latch can suppress an earned break")
+	}
+}

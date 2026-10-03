@@ -92,6 +92,35 @@ check('paused never warns even under the threshold',
     computeDisplay(active({paused: true, phaseEndsAt: 0, remainingSeconds: 30}), NOW).warning,
     false);
 
+// Idle publishes PhaseEndsAt as 0 exactly as Paused does; reading it would
+// render a huge negative. specs/panel-indicator, "Idle freezes on
+// RemainingSeconds".
+check('idle reads RemainingSeconds, not PhaseEndsAt',
+    computeDisplay(active({idle: true, phaseEndsAt: 0, remainingSeconds: 720}), NOW),
+    {dimmed: false, label: '12:00', warning: false});
+
+// The frozen label must not drift with the clock: that is the whole point
+// of suppressing the deadline for the window.
+check('idle label does not advance with time',
+    computeDisplay(active({idle: true, phaseEndsAt: 0, remainingSeconds: 720}), NOW + 600),
+    {dimmed: false, label: '12:00', warning: false});
+
+check('idle never warns even under the threshold',
+    computeDisplay(active({idle: true, phaseEndsAt: 0, remainingSeconds: 30}), NOW).warning,
+    false);
+
+// specs/panel-indicator, "Countdown resumes on return from idle".
+check('countdown resumes from PhaseEndsAt once idle clears',
+    computeDisplay(active({idle: false, phaseEndsAt: NOW + 720}), NOW),
+    {dimmed: false, label: '12:00', warning: false});
+
+// specs/panel-indicator, "Menu during an idle window". Offering Resume for
+// a freeze the user never requested would drive EventResume against a
+// session that never stored PausedRemaining.
+check('idle offers Pause and withholds Resume',
+    menuSensitivity(active({idle: true, paused: false})),
+    {start: false, stop: true, pause: true, resume: false, skip: false});
+
 check('menu when disconnected',
     menuSensitivity(DISCONNECTED),
     {start: false, stop: false, pause: false, resume: false, skip: false});
@@ -160,6 +189,13 @@ check('one second left still shows',
 
 check('paused break with time left still shows',
     shouldShowOverlay(onBreak({paused: true, phaseEndsAt: 0, remainingSeconds: 42}), NOW, false), true);
+
+// A break does not freeze while idle, so the overlay keeps counting down
+// from a live PhaseEndsAt for the whole break — including the part of it
+// the user spends away from the desk, which is the point.
+check('idle during a break still counts down from PhaseEndsAt',
+    shouldShowOverlay(active({phase: 'break', idle: false, phaseEndsAt: NOW + 420}), NOW, false),
+    true);
 
 check('paused break with nothing left shows nothing',
     shouldShowOverlay(onBreak({paused: true, phaseEndsAt: 0, remainingSeconds: 0}), NOW, false), false);

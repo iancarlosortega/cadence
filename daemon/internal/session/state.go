@@ -10,7 +10,7 @@ import "time"
 type Phase string
 
 const (
-	PhaseNone  Phase = "none"  // no active session
+	PhaseNone  Phase = "none" // no active session
 	PhaseFocus Phase = "focus"
 	PhaseBreak Phase = "break"
 )
@@ -52,9 +52,30 @@ type State struct {
 	Paused          bool
 	PausedRemaining time.Duration // valid only while Paused
 
-	// IdleSince is the wall-clock instant idle was first observed in the
-	// current run, or the zero Time if the user is currently active.
-	IdleSince time.Time
+	// Idle reports that an idle window is open: the user has been idle at
+	// least Durations.IdlePause, so elapsed time is not advancing and the
+	// adapter publishes the phase as a frozen interval (PhaseEndsAt 0 plus
+	// a frozen RemainingSeconds), exactly as it does for Paused. No
+	// "IdleRemaining" companion is needed: ElapsedInPhase is frozen for the
+	// window's duration, so Remaining() is already constant throughout it.
+	//
+	// Paused takes precedence: Idle is false whenever Paused is true, so
+	// only one frozen-interval condition is ever published
+	// (specs/daemon-control, "Idle Publication").
+	Idle bool
+
+	// IdleCredited reports that the open window has already credited a
+	// break. Observed idle time keeps growing while the user is away and is
+	// never reset by crediting — it is the compositor's number, not ours —
+	// so without this latch every tick past the credit threshold would
+	// credit again, resetting the phase and writing state once per tick for
+	// the whole absence (specs/session-timer, "Idle Credit").
+	IdleCredited bool
+
+	// Neither flag is persisted. Both are derived from a live idle reading
+	// and are re-derived within one tick of startup; a persisted latch could
+	// outlive the absence that set it and suppress a break the user earned.
+	// See store/file.go, which maps State onto an explicit record.
 
 	// LastObserved is the wall-clock instant Apply last advanced this
 	// state. Every EventTick and EventSuspended measures elapsed real

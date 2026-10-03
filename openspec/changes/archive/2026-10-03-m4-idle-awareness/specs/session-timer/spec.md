@@ -1,26 +1,6 @@
-# session-timer Specification
+# session-timer Specification (delta)
 
-## Purpose
-
-Phase model and transition rules for a cadence session.
-
-## Requirements
-
-### Requirement: Phase Cycle
-
-An active session MUST alternate `focus` and `break`. Durations MUST come from configuration.
-
-#### Scenario: Focus elapses
-
-- GIVEN an active session in `focus` with 0s remaining
-- WHEN the clock advances
-- THEN the phase becomes `break`
-
-#### Scenario: Break elapses
-
-- GIVEN an active session in `break` with 0s remaining
-- WHEN the clock advances
-- THEN the phase becomes `focus`
+## MODIFIED Requirements
 
 ### Requirement: Idle Credit
 
@@ -90,16 +70,6 @@ write state and emit a signal every tick for the whole absence.
 - THEN the phase is still `focus` with 20m elapsed
 - AND the timer advances again from the moment of return
 
-### Requirement: Pause Semantics
-
-Pause MUST store remaining duration, not a deadline. A paused phase MUST NOT expire.
-
-#### Scenario: Paused phase does not expire
-
-- GIVEN `focus` paused with 10m remaining
-- WHEN the clock advances 3h
-- THEN the phase is still `focus`, paused, 10m remaining
-
 ### Requirement: Suspend Is Time Away
 
 System suspend MUST be treated as idle time of the suspended duration, using the same thresholds.
@@ -126,15 +96,7 @@ as a suspend and as input idleness, the daemon MUST NOT credit it twice.
 - THEN exactly one break is credited
 - AND a subsequent tick does not credit a second break on account of the same absence
 
-### Requirement: Tier Gating
-
-Break start MUST consult the tier source. `T0` MUST start the break.
-
-#### Scenario: T0 starts break
-
-- GIVEN `focus` reaching 0s and tier `T0`
-- WHEN the phase would change
-- THEN the phase becomes `break`
+## ADDED Requirements
 
 ### Requirement: Idle Source Availability
 

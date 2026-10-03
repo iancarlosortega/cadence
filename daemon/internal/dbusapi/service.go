@@ -29,6 +29,10 @@ type Service struct {
 	conn  *dbus.Conn
 	props *prop.Properties
 
+	// published mirrors the values last announced on the bus, so publish
+	// can emit only what actually changed. Nil until the first publish.
+	published map[string]dbus.Variant
+
 	state session.State
 	clock session.Clock
 	store session.Store
@@ -42,6 +46,19 @@ type Service struct {
 // properties. Callers still need to run Serve/Tick loops separately
 // (cmd/cadenced).
 func New(conn *dbus.Conn, initial session.State, store session.Store, clock session.Clock, tier session.TierSource, idle session.IdleSource) (*Service, error) {
+	return newService(conn, BusName, initial, store, clock, tier, idle)
+}
+
+// newService is New with the well-known name as a parameter. busName may be
+// empty, in which case the service is exported and reachable on conn's unique
+// name but claims no well-known name.
+//
+// That empty case exists for the tests. They used to export under the
+// production BusName and call t.Skip when it was already held — which a
+// running cadenced always does — so `go test ./...` reported ok while
+// silently skipping every D-Bus test on a normal developer machine. Two real
+// defects shipped behind that green result (F9).
+func newService(conn *dbus.Conn, busName string, initial session.State, store session.Store, clock session.Clock, tier session.TierSource, idle session.IdleSource) (*Service, error) {
 	s := &Service{
 		conn:  conn,
 		state: initial,
@@ -65,14 +82,22 @@ func New(conn *dbus.Conn, initial session.State, store session.Store, clock sess
 		return nil, fmt.Errorf("dbusapi: export methods: %w", err)
 	}
 
+	// Emit is EmitFalse on every property: prop.Properties emits one
+	// PropertiesChanged per Set with a single-entry map and no old/new
+	// comparison (godbus/dbus/v5/prop, set -> emitChange). That shape
+	// violates specs/daemon-control "An idle window emits exactly twice",
+	// which requires one signal per boundary. publish batches the changed
+	// properties into a single Emit instead; prop.Properties remains the
+	// store that answers Get/GetAll.
 	propsMap := prop.Map{
 		InterfaceName: {
-			"SessionActive":    {Value: initial.Active, Writable: false, Emit: prop.EmitTrue},
-			"Phase":            {Value: string(initial.Phase), Writable: false, Emit: prop.EmitTrue},
-			"PhaseEndsAt":      {Value: int64(0), Writable: false, Emit: prop.EmitTrue},
-			"RemainingSeconds": {Value: int64(0), Writable: false, Emit: prop.EmitTrue},
-			"Paused":           {Value: initial.Paused, Writable: false, Emit: prop.EmitTrue},
-			"Tier":             {Value: string(initial.Tier), Writable: false, Emit: prop.EmitTrue},
+			"SessionActive":    {Value: initial.Active, Writable: false, Emit: prop.EmitFalse},
+			"Phase":            {Value: string(initial.Phase), Writable: false, Emit: prop.EmitFalse},
+			"PhaseEndsAt":      {Value: int64(0), Writable: false, Emit: prop.EmitFalse},
+			"RemainingSeconds": {Value: int64(0), Writable: false, Emit: prop.EmitFalse},
+			"Paused":           {Value: initial.Paused, Writable: false, Emit: prop.EmitFalse},
+			"Tier":             {Value: string(initial.Tier), Writable: false, Emit: prop.EmitFalse},
+			"Idle":             {Value: initial.Idle, Writable: false, Emit: prop.EmitFalse},
 		},
 	}
 	props, err := prop.Export(conn, ObjectPath, propsMap)
@@ -108,12 +133,14 @@ func New(conn *dbus.Conn, initial session.State, store session.Store, clock sess
 		return nil, fmt.Errorf("dbusapi: export introspection: %w", err)
 	}
 
-	reply, err := conn.RequestName(BusName, dbus.NameFlagDoNotQueue)
-	if err != nil {
-		return nil, fmt.Errorf("dbusapi: request name %s: %w", BusName, err)
-	}
-	if reply != dbus.RequestNameReplyPrimaryOwner {
-		return nil, fmt.Errorf("dbusapi: name %s already owned (reply %d) — is cadenced already running?", BusName, reply)
+	if busName != "" {
+		reply, err := conn.RequestName(busName, dbus.NameFlagDoNotQueue)
+		if err != nil {
+			return nil, fmt.Errorf("dbusapi: request name %s: %w", busName, err)
+		}
+		if reply != dbus.RequestNameReplyPrimaryOwner {
+			return nil, fmt.Errorf("dbusapi: name %s already owned (reply %d) — is cadenced already running?", busName, reply)
+		}
 	}
 
 	if err := s.publish(); err != nil { // seed properties from the actual initial state
@@ -184,17 +211,25 @@ func (s *Service) apply(ev session.Event) *dbus.Error {
 }
 
 // publish writes the current state's public fields into the exported
-// properties. prop.Properties.SetMust emits PropertiesChanged for any
-// value that actually changed (Emit: EmitTrue) — see
-// github.com/godbus/dbus/v5/prop: Set/SetMust call emitChange internally.
+// properties and announces the ones that changed as a single
+// PropertiesChanged.
+//
+// It emits the signal itself rather than letting prop.Properties do it.
+// godbus emits one signal per Set, carrying a single-entry map, and never
+// compares the old value to the new one (v5/prop, set -> emitChange), so a
+// SetMust-per-property publish produced seven signals per idle boundary and
+// republished four properties that had not changed. specs/daemon-control
+// requires exactly one signal as an idle window opens and one as it closes,
+// and requires that a tick changing no published value emit nothing at all.
+//
 // publish is only ever called from within apply, i.e. only on a real
 // transition, never from a quiet Tick.
-// publish converts prop's panic-on-error contract into an error. godbus
-// exposes only SetMust for an internal write: Set enforces the Writable flag,
-// which is false for every property here, and the non-panicking p.set is
-// unexported. SetMust panics on a closed connection, which is ordinary at
-// logout, so that panic is caught here and handed to the caller instead of
-// taking the process down (specs/daemon-control; cmd/cadenced logs it).
+//
+// SetMust panics on a closed connection, which is ordinary at logout, so that
+// panic is caught here and handed to the caller instead of taking the process
+// down (specs/daemon-control; cmd/cadenced logs it). godbus exposes only
+// SetMust for an internal write: Set enforces the Writable flag, which is
+// false for every property here, and the non-panicking p.set is unexported.
 func (s *Service) publish() (err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -207,16 +242,58 @@ func (s *Service) publish() (err error) {
 	if s.state.Paused {
 		remaining = s.state.PausedRemaining
 	}
+
+	// Paused and Idle are both frozen intervals: no published deadline can
+	// stay true for their duration, so none is published and the client
+	// reads the frozen RemainingSeconds instead (specs/daemon-control,
+	// "Idle Publication"). Idle needs no PausedRemaining equivalent —
+	// ElapsedInPhase is frozen while the window is open, so Remaining()
+	// is already constant throughout it.
+	frozen := s.state.Paused || s.state.Idle
+
+	// RemainingSeconds and PhaseEndsAt are derived from one truncated
+	// integer on one integer-second clock, never from a float now. A client
+	// counting down as PhaseEndsAt minus its own floor(now) must reproduce
+	// the frozen RemainingSeconds exactly at the instant a frozen interval
+	// ends; deriving the deadline from a float now left the two up to a
+	// second apart, so the countdown rendered one second HIGHER on leaving
+	// idle than it had shown while frozen (specs/daemon-control, "A client
+	// never drifts across suspends, idle windows and transitions").
+	remainingSecs := int64(remaining.Seconds())
 	endsAt := int64(0)
-	if s.state.Active && !s.state.Paused {
-		endsAt = now.Add(remaining).Unix()
+	if s.state.Active && !frozen {
+		endsAt = now.Unix() + remainingSecs
 	}
 
-	s.props.SetMust(InterfaceName, "SessionActive", s.state.Active)
-	s.props.SetMust(InterfaceName, "Phase", string(s.state.Phase))
-	s.props.SetMust(InterfaceName, "PhaseEndsAt", endsAt)
-	s.props.SetMust(InterfaceName, "RemainingSeconds", int64(remaining.Seconds()))
-	s.props.SetMust(InterfaceName, "Paused", s.state.Paused)
-	s.props.SetMust(InterfaceName, "Tier", string(s.state.Tier))
-	return nil
+	desired := map[string]dbus.Variant{
+		"SessionActive":    dbus.MakeVariant(s.state.Active),
+		"Phase":            dbus.MakeVariant(string(s.state.Phase)),
+		"PhaseEndsAt":      dbus.MakeVariant(endsAt),
+		"RemainingSeconds": dbus.MakeVariant(remainingSecs),
+		"Paused":           dbus.MakeVariant(s.state.Paused),
+		"Tier":             dbus.MakeVariant(string(s.state.Tier)),
+		"Idle":             dbus.MakeVariant(s.state.Idle),
+	}
+
+	changed := make(map[string]dbus.Variant, len(desired))
+	for name, v := range desired {
+		if prev, ok := s.published[name]; ok && prev.Value() == v.Value() {
+			continue
+		}
+		s.props.SetMust(InterfaceName, name, v.Value())
+		changed[name] = v
+	}
+	if len(changed) == 0 {
+		return nil
+	}
+
+	if s.published == nil {
+		s.published = make(map[string]dbus.Variant, len(desired))
+	}
+	for name, v := range changed {
+		s.published[name] = v
+	}
+
+	return s.conn.Emit(ObjectPath, "org.freedesktop.DBus.Properties.PropertiesChanged",
+		InterfaceName, changed, []string{})
 }

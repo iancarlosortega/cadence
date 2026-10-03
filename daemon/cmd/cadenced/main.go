@@ -28,11 +28,6 @@ const tickInterval = 5 * time.Second
 // (design.md, Decision "Persisted quantity").
 const heartbeatInterval = 60 * time.Second
 
-// noIdleSource is M1's stub: idle detection is M4 (Mutter IdleMonitor).
-type noIdleSource struct{}
-
-func (noIdleSource) IdleFor(time.Time) time.Duration { return 0 }
-
 // fixedT0Tier is M1's stub: real tier detection is M5 (PipeWire, the
 // ScreenCast portal, camera).
 type fixedT0Tier struct{}
@@ -83,7 +78,9 @@ func run() error {
 	}
 	defer conn.Close()
 
-	svc, err := dbusapi.New(conn, initial, st, clock, fixedT0Tier{}, noIdleSource{})
+	idle := dbusapi.NewMutterIdleSource(conn)
+
+	svc, err := dbusapi.New(conn, initial, st, clock, fixedT0Tier{}, idle)
 	if err != nil {
 		return err
 	}

@@ -1,0 +1,364 @@
+change: m4-idle-awareness
+project: cadence
+created: 2026-09-19
+artifact_store: openspec
+execution_mode: auto
+delivery_strategy: exception-ok
+chain_strategy: null
+delivery_note: >-
+  Preflight collected 2026-09-19 for this change: automatic pace, openspec artifacts. The user
+  develops this personally and pushes straight to main, and accepted size:exception up front, so
+  the 400-line budget never stops the chain before apply. The tasks forecast still reports the
+  estimate. Commit and push remain separate human decisions.
+
+summary: >-
+  Make idle detection real and make the idle path honest to clients. Replaces the zero-stub
+  IdleSource with a working adapter, and resolves the contract question deferred as finding F2:
+  what a client displays while the user is idle, given the correct PhaseEndsAt advances
+  continuously across the idle window rather than at its edges.
+
+phases:
+  explore:
+    state: done
+    artifact: openspec/changes/m4-idle-awareness/exploration.md
+  research:
+    state: done
+    artifact: openspec/changes/m4-idle-awareness/research.md
+    lane: idle-source
+    claims: 9
+    method: >-
+      Primary evidence is empirical, measured on the user's own machine (Fedora 42, GNOME Shell 48,
+      Wayland) via busctl on the live session bus. Web search was secondary and largely unhelpful;
+      the upstream interface turned out to be undocumented, which is itself claim C5.
+    outcome: >-
+      P2's central unknown is resolved in the affirmative. org.gnome.Mutter.IdleMonitor is exported
+      by gnome-shell on the session bus and is reachable from a plain user process outside the Shell,
+      so no Shell-side reporter is needed and the extension stays a pure consumer. GetIdletime
+      returns uint64 milliseconds advancing 1:1 with real time, which maps onto the existing
+      IdleFor(now) port with no contract change.
+    unverified:
+      - >-
+        C7 locked-screen behavior. Not testable without locking the session and not documented
+        upstream. Matters because a locked screen is unambiguously time away and should reach
+        IdleCredit. Owed as a live-session check, like M2's post-logout checks.
+      - >-
+        C8 suspend interaction, the highest risk found. cadence already credits suspend via login1
+        and applySuspend. If GetIdletime also accrues across a suspend, a resume could credit the
+        same absence twice. The CLOCK_MONOTONIC reasoning suggests it does not, but that is
+        inference across two layers, not measurement. Owed as a real-suspend measurement.
+
+  proposal:
+    state: done
+    artifact: openspec/changes/m4-idle-awareness/proposal.md
+    capabilities_new: []
+    capabilities_modified: [daemon-control, session-timer, panel-indicator]
+    success_criteria: 8
+    note: >-
+      panel-indicator becomes a modified capability for the first time since M2 archived it as
+      consumer-only. That is a direct and priced consequence of choosing Option B: the extension's
+      interface XML is hardcoded, so a new Idle property is not visible to the proxy without an
+      extension edit. Criteria 5 and 6 are live-session checks, not unit tests, carried from
+      research C7 and C8.
+  specs:
+    state: done
+    artifact: openspec/changes/m4-idle-awareness/specs/
+    files:
+      - specs/daemon-control/spec.md
+      - specs/session-timer/spec.md
+      - specs/panel-indicator/spec.md
+    delta_sections: [MODIFIED, ADDED]
+    requirements_modified: 8
+    requirements_added: 2
+    scenarios: 38
+    revision: 3
+    preservation_check: >-
+      Diffed every preserved scenario body against the main specs. 17 preserved byte-for-byte across
+      the three capabilities. Two deliberate changes, both recorded below; nothing else drifted and
+      nothing was silently dropped.
+    deliberate_scenario_changes:
+      - capability: session-timer
+        requirement: Idle Credit
+        scenario: Short idle pauses
+        change: >-
+          Gained "AND the idle window has been published as open". This is the inversion the
+          exploration flagged: the scenario previously pinned "no effect", which was a correct test
+          of an incorrect requirement. The spec moves here so the test can follow at apply rather
+          than the change looking like a regression.
+      - capability: daemon-control
+        requirement: Change Notification
+        scenario: A client never drifts across suspends and transitions
+        change: >-
+          Renamed and widened to "A client never drifts across suspends, idle windows and
+          transitions", and its client definition now covers reading RemainingSeconds during a
+          frozen interval. Not a deletion: the previous property is retained and extended over the
+          paths M4 makes reachable. This is the scenario fix-suspend-deadline-republish narrowed at
+          its design phase precisely because idle was out of its scope.
+    note: >-
+      Three capabilities, no new ones. The delta discharges the general Change Notification
+      obligation carried since fix-suspend-deadline-republish and removes its trailing "M4 must
+      satisfy this" note, because M4 now does. New requirement "Idle Publication" fixes Paused
+      taking precedence over Idle so exactly one frozen-interval condition is ever on the wire, and
+      new requirement "Idle Source Availability" makes zero idle the documented safe value when the
+      compositor interface is absent. panel-indicator "Control Actions" now states explicitly that
+      menu sensitivity derives from Paused and never from Idle, which is the spec-level guard
+      against the Option A corruption path.
+  design:
+    state: done
+    artifact: openspec/changes/m4-idle-awareness/design.md
+    decisions: 8
+    word_count: 1995
+    note: >-
+      Decision 2 is the find of the phase: applyTick's credit branch is unconditional, and observed
+      idle from a real source grows monotonically and is never reset by crediting, so every tick
+      past the credit threshold would reset the phase, write state and emit a signal for the whole
+      absence. Unreachable today only because IdleSource is stubbed, which is exactly the condition
+      M4 removes. Fixed with an IdleCredited latch, which also removes research risk C8
+      structurally: applySuspend sets the same flags when it credits, so a following tick stays
+      silent whether or not GetIdletime accrues across suspend. C8 is still measured, but as
+      confirmation rather than a load-bearing dependency.
+    decisions_summary:
+      - "D1: poll GetIdletime rather than subscribe to Mutter idle watches; tickInterval is 5s (main.go:25), so polling costs 12 round trips a minute and is self-correcting where a missed watch edge is not"
+      - "D2: latch the credit branch with State.IdleCredited; fixes the repeated-credit defect and removes C8 structurally"
+      - "D3: Idle and IdleCredited replace IdleSince, which is deleted; F2's revive-or-remove obligation discharged by removal"
+      - "D4: idle needs no frozen-remaining field, because ElapsedInPhase is frozen so Remaining() is already constant for the window; publish only treats idle as a frozen interval"
+      - "D5: EventPause clears Idle, enforcing the Paused-over-Idle precedence the spec requires"
+      - "D6: adapter fails safe to zero with no name watching, logging on availability transition rather than per failure (12 failures a minute otherwise)"
+      - "D7: assert the millisecond conversion in a test, because research C5 found no upstream contract for the unit"
+      - "D8: idle flags are runtime state and are not persisted; bounded cost is one extra credit after a restart mid-window, preferred over a stale latch suppressing a legitimate credit"
+    spec_revision_triggered: >-
+      Design raised session-timer specs to revision 2. The repeated-credit defect found in D2 was
+      not pinned by the spec as written: "A single absence MUST credit at most one break" existed
+      only under Suspend Is Time Away, leaving the idle path uncovered. Idle Credit gained the
+      conditioning requirement and two scenarios, "A long absence credits exactly one break" and
+      "A second absence credits again".
+  tasks:
+    state: done
+    artifact: openspec/changes/m4-idle-awareness/tasks.md
+    phases: 8
+    task_count: 55
+    review_forecast:
+      estimated_changed_lines: "~430"
+      budget_risk: High
+      chained_prs_recommended: false
+      chain_strategy: null
+      decision_needed_before_apply: false
+      guard_note: >-
+        Over the 400-line ceiling, and M2's forecast came in 35% low, so the real figure could reach
+        ~580. delivery_strategy is exception-ok: the user accepted size:exception up front at
+        preflight on 2026-09-19, so the guard reports the forecast and continues without prompting.
+        This run uses size:exception, and sdd-apply must be told so.
+      split_rejected_because: >-
+        Correctness, not convenience. Design "Migration / Rollout" requires the daemon and extension
+        halves to land together: a daemon publishing Idle to an extension that does not read it
+        freezes PhaseEndsAt at 0 with no client-side branch to handle it. A split would ship a
+        known-broken intermediate state, which is worse than a large review. Roughly 45% of the
+        estimate is test code.
+    note: >-
+      Phases 2 and 4 carry three mutation checks, because a regression test never observed failing
+      is a guess. Task 2.7 pins the C8 double-credit risk in the domain where it can be tested
+      deterministically; task 8.6 observes the same property on a real suspend. Task 8.8 is the
+      direct check on the Decision 2 repeated-credit defect: state file mtime and journal after a
+      15-minute absence. Task 8.5 is the first observation of locked-screen idle behavior, which no
+      documentation states; its answer is recorded in the verify report whichever way it falls.
+    apply_directives:
+      size_exception: true
+      strict_tdd: check sdd-init/cadence before launching apply
+      halves_must_land_together: true
+  apply:
+    state: done
+    completed: >-
+      2026-10-03. Phase 8 live verification closed 54/55, plus 8.6 waived by the user (real suspend
+      wakes in 7-9s on this hardware). Post-apply fixes F7, F8, F9 landed in dbusapi/service.go.
+    artifact: openspec/changes/m4-idle-awareness/apply-progress.md
+    tasks_complete: 47
+    tasks_total: 55
+    changed_lines: 711
+    files_changed:
+      - daemon/internal/session/state.go
+      - daemon/internal/session/machine.go
+      - daemon/internal/session/machine_test.go
+      - daemon/internal/dbusapi/idle.go
+      - daemon/internal/dbusapi/idle_test.go
+      - daemon/internal/dbusapi/service.go
+      - daemon/internal/dbusapi/service_test.go
+      - daemon/internal/store/file_test.go
+      - daemon/cmd/cadenced/main.go
+      - extension/extension.js
+      - extension/render.js
+      - extension/test-render.js
+    test_results: >-
+      go vet clean; go test ./... all daemon packages pass with ZERO skips; gjs test-render all
+      checks pass including 7 new idle cases; three mutation checks each observed red then green.
+    runtime_attempt: >-
+      Attempt 1 settled outcome=passed, 665 changed lines, evidence revision
+      sha256:4dbe0c96. The two new Go source files were declared via --untracked-scope=select;
+      planning artifacts excluded. changed_line_budget_exceeded=true against the declared 600, so
+      the ledger reports decision_required=true and next_action=reset. Reset is a maintainer
+      decision and is never automatic, so it is left to the user.
+    open_tasks: >-
+      All 8 remaining tasks are Phase 8 live verification, which needs this build installed over the
+      running daemon and a Wayland logout to reload the extension, as M2 required. That includes the
+      two observations research could not settle: C7 locked-screen behavior (8.5) and the C8
+      real-suspend double-credit check (8.6).
+    forecast_accuracy: >-
+      Forecast ~430, actual 665 — 55% low. M2 was 35% low. Same cause both times: test code is
+      underestimated. 55% of this change is tests. Future forecasts should weight test lines at
+      about 1.5x the logic they cover.
+    deviations:
+      - >-
+        Task 5.5 grew beyond leaving menuSensitivity alone: shouldShowOverlay needed the same
+        treatment. Same file, same cause, recorded as finding F5.
+      - >-
+        idleFromMilliseconds was extracted as a named function so the unit could be pinned without a
+        bus. The design implied the conversion but did not name it.
+    observed_not_touched:
+      - >-
+        daemon/internal/config/config.go fails gofmt. Pre-existing, unrelated to idle, deliberately
+        not bundled. state.go's own pre-existing nit was fixed because this change edits that file.
+  verify:
+    state: done
+    artifact: openspec/changes/m4-idle-awareness/verify-report.md
+    verdict: pass_with_warnings
+    requirements: 10/10
+    scenarios: 38/38
+    blockers: 0
+    warnings: 4
+    date: 2026-10-03
+  archive:
+    state: done
+    artifact: openspec/changes/m4-idle-awareness/archive-report.md
+    date: 2026-10-03
+
+relationships:
+  dependsOn: []
+  supersedes: []
+  amends: []
+  conflictsWith: []
+  blocks: []
+  sameDomainActiveChanges: []
+  inherits:
+    - from: fix-suspend-deadline-republish
+      finding: F2
+      why: >-
+        That change fixed the suspend half of the notification defect and deferred the idle half
+        here, together with four explicit obligations.
+
+product_decisions: confirmed
+
+resolved_product_decisions:
+  - id: P1
+    question: What a client displays while the user is idle.
+    raised_by: exploration Decision 1
+    blocks: [proposal]
+    options:
+      - id: A
+        label: Reuse the existing Paused property
+        cost: Zero daemon property changes, zero extension changes.
+        defect: >-
+          menuSensitivity (extension/render.js:48-57) derives the menu from the same flag, so an
+          idle freeze would grey out Pause and offer Resume for a pause the user never requested.
+          Resume maps to EventResume (machine.go:57-68), which recomputes ElapsedInPhase from
+          PausedRemaining; firing it against an idle freeze that never set PausedRemaining is a
+          state-corruption path, not a cosmetic one.
+      - id: B
+        label: Add an Idle boolean, reuse the paused freeze convention
+        cost: >-
+          The extension's interface XML is hardcoded (extension.js:25-41) and the proxy is built
+          from it via Gio.DBusProxy.makeProxyWrapper, so a property absent from that XML is never
+          surfaced. Adding Idle requires an extension change and makes panel-indicator a modified
+          capability.
+        benefit: Countdown and menu both stay truthful; reuses a convention already proved in production.
+      - id: C
+        label: Drop the idle-pause freeze entirely
+        cost: >-
+          A product reversal, not a technical simplification: short idle would count as work, and
+          IdlePause plus its config key (config.go:85-89) become dead, which is a user-facing removal.
+        benefit: >-
+          No new property, no extension change, no IdleSince, no edge detection, and the defect
+          disappears because no path declines to charge time without a transition. The only option
+          that ships value while IdleSource is still stubbed.
+    resolved: 2026-09-19
+    decision: B
+    status: confirmed
+    recommendation_rationale: >-
+      The only option that keeps both the countdown and the menu truthful, reusing the freeze
+      convention this codebase already proved rather than inventing one. A is disqualified by the
+      Resume-against-a-non-pause corruption path, not by taste. C is coherent and cheapest but
+      silently reverses a product rule the user set at M1, so it is their call.
+  - id: P2
+    question: Run the sdd-research lane on the idle source before design?
+    raised_by: exploration Decision 2
+    blocks: [proposal, design]
+    resolved: 2026-09-19
+    decision: yes
+    status: confirmed
+    outcome: >-
+      Lane ran and is recorded in research.md. C1/C2 removed the only feasibility blocker on Option
+      B and established that no Shell-side reporter is needed, so the extension stays a pure
+      consumer. C6 found native edge detection in Mutter, which may make reviving IdleSince
+      unnecessary. C7 and C8 remain unverified and are carried as success criteria 5 and 6.
+    recommendation_rationale: >-
+      The idle source is the one material unknown, and the answer can eliminate options on
+      feasibility grounds. A signal reachable only inside the Shell process would force a
+      Shell-side reporter and invert M4's dependency direction, which is architecture, not detail.
+
+verified_facts:
+  idle_pipeline:
+    port: "daemon/internal/session/ports.go:21-25, IdleSource.IdleFor(now)"
+    production_stub: "daemon/cmd/cadenced/main.go:31-34 noIdleSource returns 0, wired at main.go:86"
+    sampling: "daemon/internal/dbusapi/service.go:140-144, Tick reads IdleFor into EventTick"
+    domain: "daemon/internal/session/machine.go:95-112, applyTick, three branches"
+  both_idle_branches_unreachable_today: true
+  unreachable_because: "IdleSource is stubbed to zero, so applyTick always takes its default branch"
+  defect_location: "daemon/internal/session/machine.go:100-105"
+  defect_mechanism: >-
+    ElapsedInPhase freezes while wall time advances, so Remaining() (state.go:98-105) is constant
+    while now moves. publish derives endsAt = now.Add(remaining).Unix() (service.go:205-213), so the
+    correct PhaseEndsAt advances continuously across the whole idle window, not at its edges.
+  false_comment: >-
+    "nothing observable changed" at machine.go:101-103 is false and M4 owes its deletion.
+  error_bound: >-
+    7 minutes, from IdleCredit 10m minus IdlePause 3m (config.go:20-21). After that creditBreak
+    fires and republishes anyway, so edge detection alone bounds the error rather than removing it.
+  freeze_convention_already_exists:
+    daemon: "service.go:206-213, when Paused remaining comes from PausedRemaining and endsAt is 0"
+    client: "extension/render.js:30-39, computeDisplay branches on state.paused and reads remainingSeconds"
+    pinned_by: "extension/test-render.js:86-87"
+    significance: >-
+      Not known when F2 was written. The question of what a client shows during a frozen interval is
+      already answered in this codebase; M4's decision is which property carries it, not whether to
+      freeze.
+  dead_field: "IdleSince (state.go:53-57), declared with the exact edge-detection semantics an idle implementation needs, never read or written anywhere"
+  extension_xml_is_hardcoded: "extension/extension.js:25-41, six properties; proxy built via makeProxyWrapper at extension.js:42"
+  test_that_pins_the_old_requirement: "daemon/internal/session/machine_test.go:55-67 TestShortIdlePauses asserts len(effects) == 0"
+
+inherited_obligations:
+  from: "fix-suspend-deadline-republish finding F2"
+  items:
+    - Satisfy the daemon-control Change Notification requirement for the idle paths M4 makes reachable.
+    - Decide what a client displays during an idle window, since the deadline advances throughout it.
+    - Either bring the dead IdleSince field (state.go:53-57) to life or delete it.
+    - Delete the "nothing observable changed" comment, which is false.
+
+risks:
+  - >-
+    The idle source is an unknown and gates everything. Every option except C is worthless without a
+    working IdleSource; C is the only branch that ships value with the adapter still stubbed.
+  - >-
+    Options A and B make panel-indicator a modified capability. M2 has been archived as
+    consumer-only until now.
+  - >-
+    M4 makes a latent defect reachable. The adapter and the notification fix must land together, or
+    M4 ships the very drift it exists to prevent.
+  - >-
+    TestShortIdlePauses (machine_test.go:55-67) is a correct test of an incorrect requirement.
+    Options A and B invert its assertion, so the spec must move before the test.
+  - >-
+    Screen lock interacts with idle and is unexamined. Locked-and-idle may need to differ from
+    idle-at-desk; nothing in the current spec addresses it.
+
+notes:
+  - >-
+    SDD sub-agent dispatch is refused in this runtime (the Claude Code hook cannot transport
+    authenticated caller provenance), so all phases run inline, as in M1, M2, M3 and
+    fix-suspend-deadline-republish.
