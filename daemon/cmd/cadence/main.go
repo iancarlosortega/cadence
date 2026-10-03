@@ -62,16 +62,48 @@ func printStatus(obj dbus.BusObject) {
 		return
 	}
 
-	phase := getString(obj, "Phase")
-	paused := getBool(obj, "Paused")
-	remaining := getInt64(obj, "RemainingSeconds")
+	snap := statusSnapshot{
+		Phase:            getString(obj, "Phase"),
+		Paused:           getBool(obj, "Paused"),
+		Idle:             getBool(obj, "Idle"),
+		PhaseEndsAt:      getInt64(obj, "PhaseEndsAt"),
+		RemainingSeconds: getInt64(obj, "RemainingSeconds"),
+	}
 	tier := getString(obj, "Tier")
 
-	state := phase
-	if paused {
-		state = phase + " (paused)"
+	fmt.Printf("%s — %s remaining, tier %s\n", snap.label(), snap.remaining(time.Now()), tier)
+}
+
+// statusSnapshot is the subset of the daemon's properties that status
+// renders, read once so the derivation below is pure and testable.
+type statusSnapshot struct {
+	Phase            string
+	Paused           bool
+	Idle             bool
+	PhaseEndsAt      int64
+	RemainingSeconds int64
+}
+
+// remaining mirrors the panel's derivation (specs/panel-indicator,
+// "Countdown Derivation"). RemainingSeconds is republished only on
+// transitions, so between them it is a stale snapshot; the live countdown
+// is PhaseEndsAt minus now. Paused and Idle both publish PhaseEndsAt as 0,
+// and only then is the frozen RemainingSeconds the truthful value.
+func (s statusSnapshot) remaining(now time.Time) time.Duration {
+	if s.Paused || s.Idle {
+		return time.Duration(s.RemainingSeconds) * time.Second
 	}
-	fmt.Printf("%s — %s remaining, tier %s\n", state, time.Duration(remaining)*time.Second, tier)
+	return time.Duration(max(s.PhaseEndsAt-now.Unix(), 0)) * time.Second
+}
+
+func (s statusSnapshot) label() string {
+	switch {
+	case s.Paused:
+		return s.Phase + " (paused)"
+	case s.Idle:
+		return s.Phase + " (idle)"
+	}
+	return s.Phase
 }
 
 func getBool(obj dbus.BusObject, prop string) bool {
