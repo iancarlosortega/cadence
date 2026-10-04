@@ -30,10 +30,16 @@ type EventSuspended struct {
 	From, To time.Time
 }
 
-func (EventTick) isEvent()         {}
-func (EventStartSession) isEvent() {}
-func (EventStopSession) isEvent()  {}
-func (EventPause) isEvent()        {}
-func (EventResume) isEvent()       {}
-func (EventSkipBreak) isEvent()    {}
-func (EventSuspended) isEvent()    {}
+// EventConfigChanged replaces the configured policy while the daemon runs
+// (specs/daemon-configuration, "Live Reload"; design D5). The adapter builds it
+// from a successfully loaded config file; an invalid file never becomes one.
+type EventConfigChanged struct{ Durations Durations }
+
+func (EventTick) isEvent()          {}
+func (EventStartSession) isEvent()  {}
+func (EventStopSession) isEvent()   {}
+func (EventPause) isEvent()         {}
+func (EventResume) isEvent()        {}
+func (EventSkipBreak) isEvent()     {}
+func (EventSuspended) isEvent()     {}
+func (EventConfigChanged) isEvent() {}

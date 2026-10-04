@@ -41,24 +41,24 @@ const (
 	HoldPill   HoldStage = "pill"   // held past the prompt cap; a quiet reminder
 )
 
-// Policy constants for a held break (design D2). They live here rather than
-// in Durations so neither the config file nor the store record carries them;
-// configuring them waits for config hot reload.
-const (
-	// PromptRetry is how much held, unpaused time passes between prompts.
-	PromptRetry = 5 * time.Minute
-	// PromptCap is the most prompts shown for one break; after the last one
-	// and a further PromptRetry the hold becomes a pill.
-	PromptCap = 3
-)
-
-// Durations holds the configured phase and idle thresholds. Populated from
-// config; never hardcoded in the state machine.
+// Durations is the configured policy: the phase and idle thresholds plus the
+// held-break prompt policy. Populated from config, and replaced whole by
+// EventConfigChanged; never hardcoded in the state machine. The name predates
+// PromptCap, which is a count rather than a duration; renaming it would touch
+// every fixture for no behavior gain, so it waits for a future refactor
+// (specs/session-timer, "Tier Gating"; design D1).
 type Durations struct {
 	Focus      time.Duration
 	Break      time.Duration
 	IdlePause  time.Duration // idle time before the timer stops advancing
 	IdleCredit time.Duration // idle time (or suspend) that credits a break
+
+	// PromptRetry is how much held, unpaused time passes between prompts.
+	PromptRetry time.Duration
+	// PromptCap is the most prompts shown for one break; after the last one
+	// and a further PromptRetry the hold becomes a pill. A zero cap would turn
+	// every hold straight into a pill, so config rejects it.
+	PromptCap int
 }
 
 // State is the full session state. It is immutable from the caller's point

@@ -8,7 +8,7 @@ D-Bus interface and CLI for controlling a session.
 
 ### Requirement: Control Surface
 
-The daemon MUST expose `StartSession`, `StopSession`, `Pause`, `Resume`, `SkipBreak` on the session bus, and properties `SessionActive`, `Phase`, `PhaseEndsAt`, `RemainingSeconds`, `Paused`, `Tier`, `Idle`, `Hold`, `Prompts`.
+The daemon MUST expose `StartSession`, `StopSession`, `Pause`, `Resume`, `SkipBreak` on the session bus, and properties `SessionActive`, `Phase`, `PhaseEndsAt`, `RemainingSeconds`, `Paused`, `Tier`, `Idle`, `Hold`, `Prompts`, `Config`.
 
 #### Scenario: Start then inspect
 
@@ -188,3 +188,25 @@ lifting or releasing a hold are changes to published values and are each publish
 - GIVEN `Hold` = `prompt` with 10 minutes of break remaining
 - WHEN the tier drops to `T0`
 - THEN one `PropertiesChanged` carries `Hold` = `none` and `PhaseEndsAt` = the lift instant plus 10 minutes
+
+### Requirement: Configuration Publication
+
+The daemon MUST publish a read-only property `Config` of type `a{si}` mapping each configuration
+key, as written in the file with its section (for example `timer.focus_minutes`), to its active
+value. It MUST carry every key, including those at their defaults, and MUST be present from the
+first connection.
+
+`Config` MUST be republished in one `PropertiesChanged` when a reload changes the active values,
+and MUST NOT be emitted otherwise. It is read-only: the file is the configuration's only writer.
+
+#### Scenario: Config is published from the first connection
+
+- GIVEN no config file
+- WHEN a client reads `Config`
+- THEN it maps `timer.focus_minutes` to 50 and `camera.prompt_limit` to 3, and carries all six keys
+
+#### Scenario: A reload republishes Config
+
+- GIVEN `Config` maps `timer.focus_minutes` to 50
+- WHEN the file is saved with `focus_minutes = 40`
+- THEN one `PropertiesChanged` carries `Config` with `timer.focus_minutes` = 40

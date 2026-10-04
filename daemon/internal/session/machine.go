@@ -89,6 +89,9 @@ func Apply(s State, e Event, now time.Time) (State, []Effect) {
 
 	case EventSuspended:
 		return applySuspend(s, ev)
+
+	case EventConfigChanged:
+		return applyConfig(s, ev)
 	}
 
 	return s, nil
@@ -184,11 +187,11 @@ func applyTick(s State, ev EventTick, now time.Time) (State, []Effect) {
 			return ns, nil // nothing further happens past the cap
 		}
 		ns.SincePrompt = s.SincePrompt + max(now.Sub(s.LastObserved), 0)
-		if ns.SincePrompt < PromptRetry {
+		if ns.SincePrompt < s.Durations.PromptRetry {
 			return ns, nil
 		}
 		ns.SincePrompt = 0
-		if ns.Prompts < PromptCap {
+		if ns.Prompts < s.Durations.PromptCap {
 			ns.Prompts++
 			return ns, []Effect{
 				EffectPersist{Reason: "break prompt"},
@@ -292,6 +295,29 @@ func applySuspend(s State, ev EventSuspended) (State, []Effect) {
 	}
 }
 
+// applyConfig swaps in a reloaded policy (specs/daemon-configuration, "Live
+// Reload"; design D5). It never transitions: a new length at or below the time
+// already worked is caught by the next tick's default branch, which already
+// ends a phase once ElapsedInPhase >= PhaseDuration. That keeps one
+// transition path, and an idle-frozen phase keeps its frozen semantics.
+func applyConfig(s State, ev EventConfigChanged) (State, []Effect) {
+	if ev.Durations == s.Durations {
+		return s, nil // a save that changes nothing emits nothing
+	}
+	ns := s
+	ns.Durations = ev.Durations
+	if s.Paused {
+		// The elapsed time at the pause is the old length less what was left;
+		// it is what must survive, so the frozen remainder is recomputed from
+		// the new length ("A paused phase keeps its elapsed time").
+		elapsed := s.Durations.PhaseDuration(s.Phase) - s.PausedRemaining
+		ns.PausedRemaining = max(ev.Durations.PhaseDuration(s.Phase)-elapsed, 0)
+	}
+	// PhaseEndsAt, RemainingSeconds and Config all changed, so publish; persist
+	// because the stored record carries the four duration minutes.
+	return ns, []Effect{EffectPersist{Reason: "config changed"}, EffectNotify{Reason: "config changed"}}
+}
+
 // creditBreak resets to a fresh focus phase, as if the user had just taken
 // (and finished) a break by being away — idle or suspended — for at least
 // the credit threshold.
@@ -311,7 +337,7 @@ func creditBreak(s State, at time.Time) (State, []Effect) {
 // resetting it: past the cap the hold starts as a pill, with no new prompt.
 // The caller has already set Phase to break.
 func hold(ns State) State {
-	if ns.Prompts < PromptCap {
+	if ns.Prompts < ns.Durations.PromptCap {
 		ns.Prompts++
 		ns.Hold = HoldPrompt
 	} else {

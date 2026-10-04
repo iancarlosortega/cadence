@@ -1,6 +1,7 @@
 package dbusapi
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -28,6 +29,9 @@ func testDurations() session.Durations {
 		Break:      10 * time.Minute,
 		IdlePause:  3 * time.Minute,
 		IdleCredit: 10 * time.Minute,
+		// Held-break policy defaults, so hold tests never see a zero cap.
+		PromptRetry: 5 * time.Minute,
+		PromptCap:   3,
 	}
 }
 
@@ -752,5 +756,78 @@ func TestHoldIsPublishedFromTheFirstConnection(t *testing.T) {
 	}
 	if got := getProp[int32](t, conn, "Prompts"); got != 0 {
 		t.Fatalf("Prompts = %d, want 0", got)
+	}
+}
+
+// specs/daemon-control, "Configuration Publication", Scenario "Config is
+// published from the first connection": all six keys, at their defaults.
+func TestConfigIsPublishedFromTheFirstConnection(t *testing.T) {
+	_, conn := newTestService(t, session.NewFakeClock(time.Date(2026, 9, 14, 9, 0, 0, 0, time.UTC)))
+
+	got := getProp[map[string]int32](t, conn, "Config")
+
+	want := map[string]int32{
+		"timer.focus_minutes":             50,
+		"timer.break_minutes":             10,
+		"idle.pause_after_minutes":        3,
+		"idle.credit_break_after_minutes": 10,
+		"camera.prompt_every_minutes":     5,
+		"camera.prompt_limit":             3,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Config = %v, want %v", got, want)
+	}
+}
+
+// specs/daemon-control, "Configuration Publication", Scenario "A reload
+// republishes Config": one signal carries Config and the moved PhaseEndsAt,
+// and the property read agrees. A map-valued property also exercises publish's
+// diff, which compared with == and so failed on any map (design D6).
+func TestAReloadRepublishesConfig(t *testing.T) {
+	svc, conn, clock, _ := heldService(t)
+	clock.Advance(20 * time.Minute)
+	if err := svc.Tick(); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	signals := watchSignals(t, conn)
+
+	d := testDurations()
+	d.Focus = 30 * time.Minute
+	if err := svc.ApplyConfig(d); err != nil {
+		t.Fatalf("ApplyConfig: %v", err)
+	}
+
+	changed := nextChanged(t, signals)
+	cfg, ok := changed["Config"].Value().(map[string]int32)
+	if !ok || cfg["timer.focus_minutes"] != 30 {
+		t.Fatalf("Config = %v (present=%v), want timer.focus_minutes 30", changed["Config"], ok)
+	}
+	want := clock.Now().Unix() + int64((10 * time.Minute).Seconds())
+	if v, ok := changed["PhaseEndsAt"]; !ok || v.Value() != want {
+		t.Errorf("PhaseEndsAt = %v (present=%v), want %d", v, ok, want)
+	}
+	if v, ok := changed["Phase"]; ok {
+		t.Errorf("Phase = %v was republished; no break may start", v)
+	}
+	if n := countFor(signals, 300*time.Millisecond); n != 0 {
+		t.Fatalf("%d extra signals, want exactly 1", n)
+	}
+	if got := getProp[map[string]int32](t, conn, "Config"); got["timer.focus_minutes"] != 30 {
+		t.Fatalf("Config read back = %v, want timer.focus_minutes 30", got)
+	}
+}
+
+// specs/daemon-configuration, "Live Reload", Scenario "Saving without a
+// change emits nothing".
+func TestAnEqualConfigEmitsNothing(t *testing.T) {
+	svc, conn, _, _ := heldService(t)
+	signals := watchSignals(t, conn)
+
+	if err := svc.ApplyConfig(testDurations()); err != nil {
+		t.Fatalf("ApplyConfig: %v", err)
+	}
+
+	if n := countFor(signals, 500*time.Millisecond); n != 0 {
+		t.Fatalf("an equal config emitted %d signals, want 0", n)
 	}
 }

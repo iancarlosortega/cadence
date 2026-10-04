@@ -142,8 +142,11 @@ state. A break that is running when `T2` begins MUST become held at that tick. W
 break's elapsed time MUST NOT advance, so the whole break is still owed when the hold lifts.
 
 A held break prompts the user. The first prompt happens when the hold begins. While the tier stays
-`T2`, a further prompt MUST happen each time the retry interval (5 minutes) of held, unpaused time
-passes, up to the prompt cap (3). When the retry interval passes after the last prompt, the hold
+`T2`, a further prompt MUST happen each time the configured prompt interval (default 5 minutes)
+of held, unpaused time passes, up to the configured prompt limit (default 3)
+(`daemon-configuration`, `[camera]`). A changed interval or limit applies from the next tick; a
+held break whose prompt count already meets a lowered limit enters its pill stage when the
+interval next passes. When the retry interval passes after the last prompt, the hold
 MUST enter its pill stage, and no further prompts happen. The prompt count MUST NOT reset when a
 hold lifts and is re-entered within the same break, so a camera that turns off and on cannot
 escape the cap.
@@ -258,6 +261,12 @@ tier is not sampled and nothing is emitted on its account.
 - GIVEN the screen is being cast, the camera is open and a microphone stream is running
 - WHEN the tier is sampled
 - THEN the tier is `T3`
+
+#### Scenario: A configured interval and limit
+
+- GIVEN `prompt_every_minutes = 2` and `prompt_limit = 2`, and a break that became held under `T2`
+- WHEN the tier stays `T2` for 4 minutes
+- THEN two prompts have happened and the hold is in its pill stage
 
 ### Requirement: Idle Source Availability
 

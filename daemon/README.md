@@ -51,7 +51,10 @@ busctl --user get-property dev.ian.Cadence /dev/ian/Cadence dev.ian.Cadence1 Pha
 Methods: `StartSession`, `StopSession`, `Pause`, `Resume`, `SkipBreak`.
 Properties (`org.freedesktop.DBus.Properties`, `EmitsChangedSignal=true`,
 emitted only on real transitions): `SessionActive`, `Phase`, `PhaseEndsAt`,
-`RemainingSeconds`, `Paused`, `Tier`.
+`RemainingSeconds`, `Paused`, `Tier`, `Idle`, `Hold`, `Prompts`, and `Config`
+(`a{si}`, read-only: every configuration key as `section.key`, such as
+`timer.focus_minutes`, mapped to its active value; republished when a reload
+changes it).
 
 ## Configuration
 
@@ -65,10 +68,33 @@ break_minutes = 10
 [idle]
 pause_after_minutes = 3
 credit_break_after_minutes = 10
+
+[camera]
+prompt_every_minutes = 5   # minutes between prompts while a break is held on camera
+prompt_limit = 3           # prompts shown before the hold becomes a quiet pill
 ```
 
-Unknown keys and non-positive durations are rejected at startup, naming the
-offending key.
+Every key is optional; an absent key takes the default shown. Unknown keys and
+non-positive values are rejected, naming the offending key as `section.key`.
+A key set to `0` is non-positive and is rejected too: earlier versions treated
+a literal `0` as "use the default", so a file that contains one now fails at
+startup with a diagnostic, and the fix is to delete the line.
+
+### Live reload
+
+The daemon notices a saved change within one tick (5s) and applies it to the
+running session, with no restart:
+
+- The phase in progress keeps its elapsed time and is measured against the new
+  length. Shortening a phase to at or below the time already worked ends it on
+  the next tick. A paused phase keeps its elapsed time too.
+- A file that fails to load (unknown key, non-positive value, malformed TOML)
+  is ignored: the active configuration stays as it was, and one line is logged
+  naming the problem. Saving again retries.
+- Deleting the file reverts to the defaults, as a missing file does at startup.
+- Saving without changing any value does nothing.
+
+Startup is still strict: an invalid file stops the daemon from starting.
 
 ## State
 

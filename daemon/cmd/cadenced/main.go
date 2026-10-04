@@ -39,9 +39,12 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	// The identity is taken before the load, so a save landing between the two
+	// is seen as a change by the watcher rather than lost (design D3).
+	loaded := config.Identify(configPath)
 	durations, err := config.Load(configPath)
 	if err != nil {
-		return err
+		return err // startup stays strict; only reloads are tolerant (design D8)
 	}
 	log.Printf("cadenced: config loaded from %s (focus=%s break=%s)", configPath, durations.Focus, durations.Break)
 
@@ -89,6 +92,10 @@ func run() error {
 
 	watchSystemSleep(svc, clock)
 
+	// Seeded with the file startup just read, so the first poll does not
+	// reload it.
+	watcher := config.NewWatcher(configPath, loaded)
+
 	ticker := time.NewTicker(tickInterval)
 	defer ticker.Stop()
 	heartbeat := time.NewTicker(heartbeatInterval)
@@ -100,6 +107,9 @@ func run() error {
 	for {
 		select {
 		case <-ticker.C:
+			// Reload before the tick, so a phase shortened by the new config
+			// ends on this very tick (design D4).
+			reloadConfig(watcher, svc)
 			if err := svc.Tick(); err != nil {
 				log.Printf("cadenced: tick: %v", err)
 			}
@@ -112,6 +122,25 @@ func run() error {
 			return nil
 		}
 	}
+}
+
+// reloadConfig applies a changed config file to the running session. A file
+// that fails to load is logged once by the watcher's contract and leaves the
+// active configuration untouched (specs/daemon-configuration, "Live Reload").
+func reloadConfig(w *config.Watcher, svc *dbusapi.Service) {
+	d, changed, err := w.Poll()
+	if err != nil {
+		log.Printf("cadenced: config reload ignored: %v", err)
+		return
+	}
+	if !changed {
+		return
+	}
+	if err := svc.ApplyConfig(d); err != nil {
+		log.Printf("cadenced: apply config: %v", err)
+		return
+	}
+	log.Printf("cadenced: config reloaded (focus=%s break=%s)", d.Focus, d.Break)
 }
 
 // startupGap reports the absence to replay on resume. The gap since

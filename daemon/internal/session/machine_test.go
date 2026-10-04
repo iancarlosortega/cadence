@@ -11,6 +11,11 @@ func testDurations() Durations {
 		Break:      10 * time.Minute,
 		IdlePause:  3 * time.Minute,
 		IdleCredit: 10 * time.Minute,
+		// The held-break policy comes from here too, so a fixture can never
+		// build a zero cap, which would turn every hold into a pill
+		// (design D1). The values are the spec defaults.
+		PromptRetry: 5 * time.Minute,
+		PromptCap:   3,
 	}
 }
 
@@ -672,8 +677,8 @@ func TestPromptsRepeatEveryFiveMinutesUpToTheCap(t *testing.T) {
 
 	s, _ = runTicks(s, TierT2, holdT0, 10*time.Minute)
 
-	if s.Prompts != PromptCap {
-		t.Fatalf("prompts = %d, want %d after 10 minutes", s.Prompts, PromptCap)
+	if s.Prompts != testDurations().PromptCap {
+		t.Fatalf("prompts = %d, want %d after 10 minutes", s.Prompts, testDurations().PromptCap)
 	}
 	if s.Hold != HoldPrompt {
 		t.Fatalf("hold = %q, want prompt: the pill comes only after one more interval", s.Hold)
@@ -690,12 +695,12 @@ func TestPastTheCapTheHoldBecomesAPill(t *testing.T) {
 	if s.Hold != HoldPill {
 		t.Fatalf("hold = %q, want pill", s.Hold)
 	}
-	if s.Prompts != PromptCap {
-		t.Fatalf("prompts = %d, want %d: no fourth prompt", s.Prompts, PromptCap)
+	if s.Prompts != testDurations().PromptCap {
+		t.Fatalf("prompts = %d, want %d: no fourth prompt", s.Prompts, testDurations().PromptCap)
 	}
 	// And it stays a pill.
 	s, effects := runTicks(s, TierT2, holdT0.Add(15*time.Minute), 30*time.Minute)
-	if s.Hold != HoldPill || s.Prompts != PromptCap {
+	if s.Hold != HoldPill || s.Prompts != testDurations().PromptCap {
 		t.Fatalf("hold=%q prompts=%d, want a persistent pill", s.Hold, s.Prompts)
 	}
 	if len(effects) != 0 {
@@ -771,7 +776,7 @@ func TestAFlappingCameraCannotEscapeTheCap(t *testing.T) {
 	s, _ = runTicks(s, TierT2, holdT0, 10*time.Minute) // three prompts
 	at := holdT0.Add(10*time.Minute + 5*time.Second)
 	s, _ = Apply(s, EventTick{Tier: TierT0}, at) // camera off: lifts
-	if s.Held() || s.Prompts != PromptCap {
+	if s.Held() || s.Prompts != testDurations().PromptCap {
 		t.Fatalf("setup: hold=%q prompts=%d, want lifted with the count kept", s.Hold, s.Prompts)
 	}
 
@@ -780,8 +785,8 @@ func TestAFlappingCameraCannotEscapeTheCap(t *testing.T) {
 	if !s.Held() {
 		t.Fatal("want the break held again")
 	}
-	if s.Prompts != PromptCap {
-		t.Fatalf("prompts = %d, want still %d", s.Prompts, PromptCap)
+	if s.Prompts != testDurations().PromptCap {
+		t.Fatalf("prompts = %d, want still %d", s.Prompts, testDurations().PromptCap)
 	}
 	if s.Hold != HoldPill {
 		t.Fatalf("hold = %q, want pill: re-entry at the cap shows no fourth prompt", s.Hold)
@@ -888,5 +893,159 @@ func TestPauseDuringAHoldFreezesTheRetryClock(t *testing.T) {
 	s, _ = Apply(s, EventTick{Tier: TierT2}, resumed.Add(3*time.Minute))
 	if s.Prompts != 2 {
 		t.Fatalf("prompts = %d, want 2: the clock resumed from its frozen 2m", s.Prompts)
+	}
+}
+
+// specs/session-timer, "Tier Gating", Scenario "A configured interval and
+// limit": interval 2m and limit 2 give two prompts, then the pill at 4m.
+func TestAConfiguredIntervalAndLimit(t *testing.T) {
+	d := testDurations()
+	d.PromptRetry = 2 * time.Minute
+	d.PromptCap = 2
+	s := State{Durations: d}
+	s, _ = Apply(s, EventStartSession{}, holdT0.Add(-time.Second))
+	s.ElapsedInPhase = d.Focus
+	s, _ = Apply(s, EventTick{Tier: TierT2}, holdT0) // becomes held: prompt 1
+	if s.Hold != HoldPrompt || s.Prompts != 1 {
+		t.Fatalf("setup: hold=%q prompts=%d, want prompt/1", s.Hold, s.Prompts)
+	}
+
+	s, _ = runTicks(s, TierT2, holdT0, 2*time.Minute)
+	if s.Prompts != 2 || s.Hold != HoldPrompt {
+		t.Fatalf("at 2m: hold=%q prompts=%d, want prompt/2", s.Hold, s.Prompts)
+	}
+	s, _ = runTicks(s, TierT2, holdT0.Add(2*time.Minute), 2*time.Minute)
+	if s.Hold != HoldPill || s.Prompts != 2 {
+		t.Fatalf("at 4m: hold=%q prompts=%d, want pill/2", s.Hold, s.Prompts)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// M7: live reload (specs/daemon-configuration, "Live Reload"; design D5).
+// ---------------------------------------------------------------------------
+
+func withFocus(d Durations, m time.Duration) Durations {
+	d.Focus = m
+	return d
+}
+
+// "Saving without a change emits nothing".
+func TestEqualConfigChangesNothing(t *testing.T) {
+	s := startedFocus(holdT0, 20*time.Minute)
+
+	next, effects := Apply(s, EventConfigChanged{Durations: testDurations()}, holdT0.Add(time.Second))
+
+	if len(effects) != 0 {
+		t.Fatalf("want no effects for an equal config, got %v", effects)
+	}
+	if next != s {
+		t.Fatalf("state changed on an equal config: %+v -> %+v", s, next)
+	}
+}
+
+// "Saving a new focus length": elapsed kept, remaining measured against the
+// new length.
+func TestNewFocusLengthKeepsElapsed(t *testing.T) {
+	s := startedFocus(holdT0, 20*time.Minute)
+
+	next, effects := Apply(s, EventConfigChanged{Durations: withFocus(testDurations(), 30*time.Minute)}, holdT0)
+
+	if next.ElapsedInPhase != 20*time.Minute {
+		t.Fatalf("elapsed = %s, want 20m kept", next.ElapsedInPhase)
+	}
+	if next.Remaining() != 10*time.Minute {
+		t.Fatalf("remaining = %s, want 10m against the new length", next.Remaining())
+	}
+	if next.Phase != PhaseFocus {
+		t.Fatalf("phase = %s, want focus: the event itself never transitions", next.Phase)
+	}
+	if !hasPersist(effects) || !hasNotify(effects) {
+		t.Fatalf("want Persist and Notify, got %v", effects)
+	}
+}
+
+// "Shortening below the time worked": the next tick transitions.
+func TestShorteningBelowElapsedEndsOnTheNextTick(t *testing.T) {
+	s := startedFocus(holdT0, 20*time.Minute)
+	s, _ = Apply(s, EventConfigChanged{Durations: withFocus(testDurations(), 15*time.Minute)}, holdT0)
+	if s.Phase != PhaseFocus {
+		t.Fatalf("setup: phase = %s, want focus until the tick", s.Phase)
+	}
+
+	next, _ := Apply(s, EventTick{Tier: TierT0}, holdT0.Add(5*time.Second))
+
+	if next.Phase != PhaseBreak {
+		t.Fatalf("phase = %s, want break on the next tick", next.Phase)
+	}
+}
+
+// "A paused phase keeps its elapsed time".
+func TestPausedRemainderIsRecomputedElapsedPreserved(t *testing.T) {
+	s := startedFocus(holdT0, 20*time.Minute)
+	s, _ = Apply(s, EventPause{}, holdT0)
+	if s.PausedRemaining != 30*time.Minute {
+		t.Fatalf("setup: paused remaining = %s, want 30m", s.PausedRemaining)
+	}
+
+	s, _ = Apply(s, EventConfigChanged{Durations: withFocus(testDurations(), 30*time.Minute)}, holdT0)
+
+	if s.PausedRemaining != 10*time.Minute {
+		t.Fatalf("paused remaining = %s, want 10m", s.PausedRemaining)
+	}
+	s, _ = Apply(s, EventResume{}, holdT0.Add(time.Hour))
+	if s.ElapsedInPhase != 20*time.Minute || s.Remaining() != 10*time.Minute {
+		t.Fatalf("after resume elapsed=%s remaining=%s, want 20m/10m", s.ElapsedInPhase, s.Remaining())
+	}
+}
+
+// A paused phase shortened below its elapsed time floors at zero rather than
+// going negative, so resuming ends it on the next tick.
+func TestPausedRemainderFloorsAtZero(t *testing.T) {
+	s := startedFocus(holdT0, 20*time.Minute)
+	s, _ = Apply(s, EventPause{}, holdT0)
+
+	s, _ = Apply(s, EventConfigChanged{Durations: withFocus(testDurations(), 15*time.Minute)}, holdT0)
+
+	if s.PausedRemaining != 0 {
+		t.Fatalf("paused remaining = %s, want 0", s.PausedRemaining)
+	}
+}
+
+// A held break read at a lowered limit goes to the pill at the next interval
+// (design D5; "A configured interval and limit").
+func TestHeldBreakAtALoweredLimitBecomesAPill(t *testing.T) {
+	s := heldBreak(t) // prompt 1 of the default 3
+	d := testDurations()
+	d.PromptCap = 1
+
+	s, effects := Apply(s, EventConfigChanged{Durations: d}, holdT0.Add(time.Second))
+	if s.Hold != HoldPrompt || !hasNotify(effects) {
+		t.Fatalf("hold=%q effects=%v, want the event to leave the stage alone and publish", s.Hold, effects)
+	}
+
+	s, _ = runTicks(s, TierT2, holdT0.Add(time.Second), 5*time.Minute)
+
+	if s.Hold != HoldPill || s.Prompts != 1 {
+		t.Fatalf("hold=%q prompts=%d, want pill/1 at the next interval", s.Hold, s.Prompts)
+	}
+}
+
+// An inactive session takes the new value too, so the next StartSession
+// copies it.
+func TestInactiveSessionTakesTheNewConfig(t *testing.T) {
+	s := State{Durations: testDurations()}
+	newD := withFocus(testDurations(), 25*time.Minute)
+
+	s, effects := Apply(s, EventConfigChanged{Durations: newD}, holdT0)
+	if s.Durations != newD {
+		t.Fatalf("durations = %+v, want the new config", s.Durations)
+	}
+	if !hasNotify(effects) {
+		t.Fatalf("want a Notify so Config is republished, got %v", effects)
+	}
+
+	s, _ = Apply(s, EventStartSession{}, holdT0)
+	if s.Remaining() != 25*time.Minute {
+		t.Fatalf("remaining = %s, want 25m from the new config", s.Remaining())
 	}
 }

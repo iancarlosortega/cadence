@@ -1,0 +1,99 @@
+change: m7-config-hot-reload
+project: cadence
+created: 2026-10-03
+artifact_store: hybrid
+execution_mode: auto
+delivery_strategy: exception-ok
+chain_strategy: null
+delivery_note: >-
+  Preflight collected 2026-10-03: automatic pace, both artifact stores. The user is the only
+  developer and commits directly to main, so size:exception applies.
+
+summary: >-
+  Reload ~/.config/cadence/config.toml while the daemon runs, expose the active configuration over
+  D-Bus, and fix zero passing duration validation.
+
+phases:
+  explore:
+    state: done
+    artifact: openspec/changes/m7-config-hot-reload/exploration.md
+  research:
+    state: skipped
+    reason: Nothing external to measure; TOML parsing and file stat are local and deterministic.
+  proposal:
+    state: done
+    artifact: openspec/changes/m7-config-hot-reload/proposal.md
+    capabilities_modified: [daemon-configuration, session-timer, daemon-control]
+    capabilities_new: []
+    success_criteria: 7
+  specs:
+    state: done
+    artifact: openspec/changes/m7-config-hot-reload/specs/
+    requirements: 5
+    scenarios: 32
+  design:
+    state: done
+    artifact: openspec/changes/m7-config-hot-reload/design.md
+    decisions: 9
+    notable: "publish's == diff panics on map values; switched to reflect.DeepEqual (D6)"
+  tasks:
+    state: done
+    artifact: openspec/changes/m7-config-hot-reload/tasks.md
+    phases: 8
+    review_forecast:
+      estimated_changed_lines: "~550"
+      budget_risk: High
+      chained_prs_recommended: false
+      decision_needed_before_apply: false
+      guard: exception-ok, user commits directly to main
+  apply:
+    state: done
+    artifact: openspec/changes/m7-config-hot-reload/apply-progress.md
+    changed_lines: 851
+    forecast_accuracy: "~550 forecast, 851 actual: 55% over; tests ~60% again."
+  verify:
+    state: done
+    artifact: openspec/changes/m7-config-hot-reload/verify-report.md
+    verdict: pass_with_warnings
+    requirements: 5/5
+    scenarios: 32/32
+    blockers: 0
+    warnings: 3
+    live_checks: 7/7 passed, none waived
+  archive:
+    state: done
+    artifact: openspec/changes/m7-config-hot-reload/archive-report.md
+    date: 2026-10-03
+
+product_decisions: confirmed
+
+resolved_product_decisions:
+  - id: P1
+    question: How a config change applies.
+    resolved: 2026-10-03
+    decision: A
+    label: Automatically on save
+  - id: P2
+    question: What a change does to the phase in progress.
+    resolved: 2026-10-03
+    decision: A
+    label: Applies now
+  - id: P3
+    question: Which settings become configurable.
+    resolved: 2026-10-03
+    decision: A
+    label: Durations plus prompt policy
+
+defaults_stated:
+  - Invalid file on reload is ignored; the daemon keeps the last good config and logs the key.
+  - Startup keeps failing with a diagnostic on an invalid file.
+
+latent_defects:
+  - id: D1
+    where: "daemon/internal/config/config.go:73-96"
+    what: >-
+      A value of 0 skips validation and silently means the default, against daemon-configuration
+      "Defaults And Validation", which requires rejecting non-positive values.
+
+notes:
+  - SDD sub-agent dispatch is refused in this runtime, so phases run inline as in M1-M6.

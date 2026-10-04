@@ -1,10 +1,6 @@
-# daemon-configuration Specification
+# daemon-configuration Specification (delta)
 
-## Purpose
-
-TOML configuration, defaults, and validation.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Defaults And Validation
 
@@ -40,6 +36,8 @@ The configuration keys are `[timer] focus_minutes`, `break_minutes`; `[idle] pau
 - GIVEN a config containing `[camera]` with `prompt_every_minutes = 2` and `prompt_limit = 5`
 - WHEN the daemon loads it
 - THEN a held break prompts every 2 minutes, up to 5 prompts
+
+## ADDED Requirements
 
 ### Requirement: Live Reload
 

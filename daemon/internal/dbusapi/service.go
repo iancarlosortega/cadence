@@ -5,7 +5,9 @@ package dbusapi
 
 import (
 	"fmt"
+	"reflect"
 	"sync"
+	"time"
 
 	"github.com/godbus/dbus/v5"
 	"github.com/godbus/dbus/v5/introspect"
@@ -100,6 +102,9 @@ func newService(conn *dbus.Conn, busName string, initial session.State, store se
 			"Idle":             {Value: initial.Idle, Writable: false, Emit: prop.EmitFalse},
 			"Hold":             {Value: holdString(initial), Writable: false, Emit: prop.EmitFalse},
 			"Prompts":          {Value: int32(initial.Prompts), Writable: false, Emit: prop.EmitFalse},
+			// a{si}, present from the first connection with every key
+			// (specs/daemon-control, "Configuration Publication").
+			"Config": {Value: configMap(initial.Durations), Writable: false, Emit: prop.EmitFalse},
 		},
 	}
 	props, err := prop.Export(conn, ObjectPath, propsMap)
@@ -201,6 +206,31 @@ func (s *Service) Heartbeat() error {
 // and it is never listed in New's ExportMethodTable).
 func (s *Service) ApplySuspend(ev session.EventSuspended) *dbus.Error {
 	return s.apply(ev)
+}
+
+// ApplyConfig is the config watcher's entry point after a successful reload
+// (specs/daemon-configuration, "Live Reload"; design D4). Like ApplySuspend it
+// is a plain Go method and never listed in New's ExportMethodTable: the file
+// is the configuration's only writer, so D-Bus offers no way to set it.
+func (s *Service) ApplyConfig(d session.Durations) *dbus.Error {
+	return s.apply(session.EventConfigChanged{Durations: d})
+}
+
+// configMap renders the active policy as the published Config property: each
+// key as written in the file, with its section, mapped to its value in the
+// file's units (minutes, or a count for prompt_limit). Every key is always
+// present, including those at their defaults (specs/daemon-control,
+// "Configuration Publication"). int32 is 'i' on the wire, so the property is
+// a{si}.
+func configMap(d session.Durations) map[string]int32 {
+	return map[string]int32{
+		"timer.focus_minutes":             int32(d.Focus / time.Minute),
+		"timer.break_minutes":             int32(d.Break / time.Minute),
+		"idle.pause_after_minutes":        int32(d.IdlePause / time.Minute),
+		"idle.credit_break_after_minutes": int32(d.IdleCredit / time.Minute),
+		"camera.prompt_every_minutes":     int32(d.PromptRetry / time.Minute),
+		"camera.prompt_limit":             int32(d.PromptCap),
+	}
 }
 
 func (s *Service) apply(ev session.Event) *dbus.Error {
@@ -307,11 +337,17 @@ func (s *Service) publish() (err error) {
 		// It changes exactly once per prompt, so a client sees each new
 		// prompt as a change even while Hold stays "prompt".
 		"Prompts": dbus.MakeVariant(int32(s.state.Prompts)),
+		// A map, so the diff below must not use ==: comparing two maps as
+		// interface values panics (design D6).
+		"Config": dbus.MakeVariant(configMap(s.state.Durations)),
 	}
 
+	// DeepEqual, not ==: Config is a map, and == on two interface values
+	// holding maps panics. It treats every scalar property exactly as ==
+	// did (design D6).
 	changed := make(map[string]dbus.Variant, len(desired))
 	for name, v := range desired {
-		if prev, ok := s.published[name]; ok && prev.Value() == v.Value() {
+		if prev, ok := s.published[name]; ok && reflect.DeepEqual(prev.Value(), v.Value()) {
 			continue
 		}
 		s.props.SetMust(InterfaceName, name, v.Value())

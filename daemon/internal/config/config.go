@@ -19,6 +19,10 @@ const (
 	DefaultBreak      = 10 * time.Minute
 	DefaultIdlePause  = 3 * time.Minute
 	DefaultIdleCredit = 10 * time.Minute
+
+	// Camera policy for a held break (specs/session-timer, "Tier Gating").
+	DefaultPromptRetry = 5 * time.Minute
+	DefaultPromptCap   = 3
 )
 
 // fileSchema mirrors the on-disk TOML shape. Durations are minutes in the
@@ -32,6 +36,24 @@ type fileSchema struct {
 		PauseAfterMinutes       int `toml:"pause_after_minutes"`
 		CreditBreakAfterMinutes int `toml:"credit_break_after_minutes"`
 	} `toml:"idle"`
+	Camera struct {
+		PromptEveryMinutes int `toml:"prompt_every_minutes"`
+		PromptLimit        int `toml:"prompt_limit"`
+	} `toml:"camera"`
+}
+
+// Defaults returns the configuration used when no file exists, and the base
+// that a file's present keys overlay (specs/daemon-configuration, "Defaults
+// And Validation"). A deleted file reloads to exactly this (design D3).
+func Defaults() session.Durations {
+	return session.Durations{
+		Focus:       DefaultFocus,
+		Break:       DefaultBreak,
+		IdlePause:   DefaultIdlePause,
+		IdleCredit:  DefaultIdleCredit,
+		PromptRetry: DefaultPromptRetry,
+		PromptCap:   DefaultPromptCap,
+	}
 }
 
 // Path returns the config file location: ~/.config/cadence/config.toml.
@@ -48,12 +70,7 @@ func Path() (string, error) {
 // and non-positive durations are rejected with the offending key named
 // (specs/daemon-configuration, "Unknown key rejected").
 func Load(path string) (session.Durations, error) {
-	d := session.Durations{
-		Focus:      DefaultFocus,
-		Break:      DefaultBreak,
-		IdlePause:  DefaultIdlePause,
-		IdleCredit: DefaultIdleCredit,
-	}
+	d := Defaults()
 
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return d, nil
@@ -70,29 +87,37 @@ func Load(path string) (session.Durations, error) {
 		return d, fmt.Errorf("config: unknown key %q in %s", undecoded[0].String(), path)
 	}
 
-	if f.Timer.FocusMinutes != 0 {
-		if f.Timer.FocusMinutes <= 0 {
-			return d, fmt.Errorf("config: timer.focus_minutes must be positive, got %d", f.Timer.FocusMinutes)
+	// A present key must be positive; an absent key keeps its default. The
+	// two are told apart with meta.IsDefined, not by comparing with zero:
+	// gating on `!= 0` made a literal 0 indistinguishable from "absent" and
+	// silently accepted it (design D2; specs/daemon-configuration, "Zero
+	// rejected").
+	var verr error
+	read := func(section, key string, v int) (int, bool) {
+		if verr != nil || !meta.IsDefined(section, key) {
+			return 0, false
 		}
-		d.Focus = time.Duration(f.Timer.FocusMinutes) * time.Minute
+		if v <= 0 {
+			verr = fmt.Errorf("config: %s.%s must be positive, got %d", section, key, v)
+			return 0, false
+		}
+		return v, true
 	}
-	if f.Timer.BreakMinutes != 0 {
-		if f.Timer.BreakMinutes <= 0 {
-			return d, fmt.Errorf("config: timer.break_minutes must be positive, got %d", f.Timer.BreakMinutes)
+	minutes := func(section, key string, v int, dst *time.Duration) {
+		if n, ok := read(section, key, v); ok {
+			*dst = time.Duration(n) * time.Minute
 		}
-		d.Break = time.Duration(f.Timer.BreakMinutes) * time.Minute
 	}
-	if f.Idle.PauseAfterMinutes != 0 {
-		if f.Idle.PauseAfterMinutes <= 0 {
-			return d, fmt.Errorf("config: idle.pause_after_minutes must be positive, got %d", f.Idle.PauseAfterMinutes)
-		}
-		d.IdlePause = time.Duration(f.Idle.PauseAfterMinutes) * time.Minute
+	minutes("timer", "focus_minutes", f.Timer.FocusMinutes, &d.Focus)
+	minutes("timer", "break_minutes", f.Timer.BreakMinutes, &d.Break)
+	minutes("idle", "pause_after_minutes", f.Idle.PauseAfterMinutes, &d.IdlePause)
+	minutes("idle", "credit_break_after_minutes", f.Idle.CreditBreakAfterMinutes, &d.IdleCredit)
+	minutes("camera", "prompt_every_minutes", f.Camera.PromptEveryMinutes, &d.PromptRetry)
+	if n, ok := read("camera", "prompt_limit", f.Camera.PromptLimit); ok {
+		d.PromptCap = n
 	}
-	if f.Idle.CreditBreakAfterMinutes != 0 {
-		if f.Idle.CreditBreakAfterMinutes <= 0 {
-			return d, fmt.Errorf("config: idle.credit_break_after_minutes must be positive, got %d", f.Idle.CreditBreakAfterMinutes)
-		}
-		d.IdleCredit = time.Duration(f.Idle.CreditBreakAfterMinutes) * time.Minute
+	if verr != nil {
+		return Defaults(), verr
 	}
 
 	return d, nil
