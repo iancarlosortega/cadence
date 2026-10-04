@@ -29,8 +29,8 @@ type fileSchema struct {
 		BreakMinutes int `toml:"break_minutes"`
 	} `toml:"timer"`
 	Idle struct {
-		PauseAfterMinutes         int `toml:"pause_after_minutes"`
-		CreditBreakAfterMinutes   int `toml:"credit_break_after_minutes"`
+		PauseAfterMinutes       int `toml:"pause_after_minutes"`
+		CreditBreakAfterMinutes int `toml:"credit_break_after_minutes"`
 	} `toml:"idle"`
 }
 

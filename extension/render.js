@@ -9,6 +9,10 @@
 export const WARNING_THRESHOLD_SECONDS = 120;
 export const HOLD_TO_SKIP_SECONDS = 3;
 
+/* How long the corner panel stays up for each prompt (specs/camera-prompt,
+ * "Corner Panel"; design D9). */
+export const PANEL_SECONDS = 15;
+
 export const DISCONNECTED = Object.freeze({
     available: false,
     sessionActive: false,
@@ -18,7 +22,34 @@ export const DISCONNECTED = Object.freeze({
     paused: false,
     tier: 'T0',
     idle: false,
+    hold: 'none',
+    prompts: 0,
 });
+
+/* Whether the daemon reports a held break (design D9). Written against the
+ * two held stages rather than `!== 'none'` so a snapshot without the field,
+ * from an older daemon, reads as not held. */
+function isHeld(state) {
+    return state.hold === 'prompt' || state.hold === 'pill';
+}
+
+/* (prev, state, inFullscreen) -> {wasRunning, suppressed}
+ *
+ * Fullscreen suppression is decided once, when a break starts running, so
+ * it cannot flicker as fullscreen toggles (specs/break-overlay, "Fullscreen
+ * Suppression"). A held break is owed, not running: its overlay begins when
+ * the hold lifts ("Overlay Presence"), so that is the edge. Deciding at hold
+ * entry instead would suppress the running break whenever the call that
+ * caused the hold was fullscreen, which is the usual case. */
+export function nextSuppression(prev, state, inFullscreen) {
+    const running = state.available && state.sessionActive &&
+        state.phase === 'break' && !isHeld(state);
+    if (!running)
+        return {wasRunning: false, suppressed: false};
+    if (!prev.wasRunning)
+        return {wasRunning: true, suppressed: inFullscreen};
+    return {wasRunning: true, suppressed: prev.suppressed};
+}
 
 export function formatMMSS(seconds) {
     const total = Math.max(0, Math.floor(seconds));
@@ -38,7 +69,11 @@ export function computeDisplay(state, nowSeconds) {
     // The warning is suppressed for both. It exists to catch the user's
     // attention before a break begins; while the daemon reports them idle
     // there is no attention to catch and the remainder is not moving.
-    if (state.paused || state.idle) {
+    //
+    // A held break is the third frozen interval: PhaseEndsAt is 0 and the
+    // remainder is frozen at the hold (specs/panel-indicator, "Countdown
+    // Derivation").
+    if (state.paused || state.idle || isHeld(state)) {
         return {
             dimmed: false,
             label: formatMMSS(state.remainingSeconds),
@@ -94,6 +129,12 @@ export function shouldShowOverlay(state, nowSeconds, suppressed) {
         return false;
     if (state.phase !== 'break')
         return false;
+    // A held break is the corner prompt's, not the overlay's
+    // (specs/break-overlay, "Overlay Presence"). When the hold lifts this
+    // returns true on the next render, which is the "within one tick" the
+    // spec asks for.
+    if (isHeld(state))
+        return false;
     // Paused is the only frozen condition reachable here: a break does not
     // freeze while idle (specs/session-timer, "Idle Credit"), so Idle is
     // false throughout one and PhaseEndsAt stays live.
@@ -101,4 +142,27 @@ export function shouldShowOverlay(state, nowSeconds, suppressed) {
         return state.remainingSeconds > 0;
 
     return state.phaseEndsAt - nowSeconds > 0;
+}
+
+/* Which quiet surface, if any, stands in for the overlay (specs/camera-prompt;
+ * design D9): 'panel', 'pill' or null.
+ *
+ * panelUntil is the wall-clock second the current panel expires, set by the
+ * caller when Prompts rises. Taking it as an argument keeps this pure: the
+ * 15 seconds are a function of (state, panelUntil, now) like the countdown is
+ * of (state, now), so there is no timer to cancel at teardown.
+ *
+ * Paused hides the panel but not the pill. The render tick stops while paused,
+ * so a panel shown just before a pause could never reach its 15 seconds and
+ * would stay up for the length of the pause; the pill is persistent by
+ * definition, so it has no clock to run out.
+ */
+export function promptSurface(state, panelUntil, nowSeconds) {
+    if (!state.available || !state.sessionActive)
+        return null;
+    if (state.hold === 'pill')
+        return 'pill';
+    if (state.hold === 'prompt' && !state.paused && nowSeconds < panelUntil)
+        return 'panel';
+    return null;
 }

@@ -610,3 +610,147 @@ func TestTierIsSampledOnlyWhileActiveAndUnpaused(t *testing.T) {
 		t.Fatalf("sampled %d times in total after a paused tick, want still 1", tier.calls)
 	}
 }
+
+// heldService starts a session and advances it to a held break under T2,
+// returning the service, its connection, the fake clock and the tier source
+// so a test can keep driving it. The signal watcher is attached by the
+// caller AFTER this returns, so setup traffic is not counted.
+func heldService(t *testing.T) (*Service, *godbus.Conn, *session.FakeClock, *settableTier) {
+	t.Helper()
+	clock := session.NewFakeClock(time.Date(2026, 9, 14, 9, 0, 0, 0, time.UTC))
+	tier := &settableTier{t: session.TierT0}
+	svc, conn := newTestServiceWithSources(t, clock, zeroIdle{}, tier)
+	if err := svc.StartSession(); err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	return svc, conn, clock, tier
+}
+
+// nextChanged waits for one PropertiesChanged and returns its changed map.
+func nextChanged(t *testing.T, signals <-chan *godbus.Signal) map[string]godbus.Variant {
+	t.Helper()
+	select {
+	case sig := <-signals:
+		changed, ok := sig.Body[1].(map[string]godbus.Variant)
+		if !ok {
+			t.Fatalf("signal body[1] = %T, want map[string]dbus.Variant", sig.Body[1])
+		}
+		return changed
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("no PropertiesChanged within 500ms")
+		return nil
+	}
+}
+
+// specs/daemon-control, Requirement "Hold Publication", Scenario "Entering a
+// hold": one signal carries Phase, Hold, Prompts = 1 and PhaseEndsAt = 0.
+func TestEnteringAHoldEmitsOneSignal(t *testing.T) {
+	svc, conn, clock, tier := heldService(t)
+	signals := watchSignals(t, conn)
+
+	tier.t = session.TierT2
+	clock.Advance(testDurations().Focus)
+	if err := svc.Tick(); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+
+	changed := nextChanged(t, signals)
+	if v, ok := changed["Phase"]; !ok || v.Value() != "break" {
+		t.Errorf("Phase = %v (present=%v), want break", v, ok)
+	}
+	if v, ok := changed["Hold"]; !ok || v.Value() != "prompt" {
+		t.Errorf("Hold = %v (present=%v), want prompt", v, ok)
+	}
+	if v, ok := changed["Prompts"]; !ok || v.Value() != int32(1) {
+		t.Errorf("Prompts = %v (present=%v), want int32 1", v, ok)
+	}
+	if v, ok := changed["PhaseEndsAt"]; !ok || v.Value() != int64(0) {
+		t.Errorf("PhaseEndsAt = %v (present=%v), want 0 while held", v, ok)
+	}
+	if n := countFor(signals, 300*time.Millisecond); n != 0 {
+		t.Fatalf("%d extra signals after entering the hold, want exactly 1 in total", n)
+	}
+	if got := getProp[int64](t, conn, "RemainingSeconds"); got != int64(testDurations().Break.Seconds()) {
+		t.Fatalf("RemainingSeconds = %d, want the whole break frozen", got)
+	}
+}
+
+// specs/daemon-control, "Hold Publication", Scenario "A further prompt":
+// the ticks in between emit nothing; the retry emits Prompts = 2 alone.
+func TestAFurtherPromptEmitsOnlyPrompts(t *testing.T) {
+	svc, conn, clock, tier := heldService(t)
+	tier.t = session.TierT2
+	clock.Advance(testDurations().Focus)
+	if err := svc.Tick(); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	signals := watchSignals(t, conn)
+
+	for i := 0; i < 59; i++ { // 295s: one tick short of the retry interval
+		clock.Advance(5 * time.Second)
+		if err := svc.Tick(); err != nil {
+			t.Fatalf("Tick: %v", err)
+		}
+	}
+	if n := countFor(signals, 300*time.Millisecond); n != 0 {
+		t.Fatalf("ticks between prompts emitted %d signals, want 0", n)
+	}
+
+	clock.Advance(5 * time.Second)
+	if err := svc.Tick(); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	changed := nextChanged(t, signals)
+	if v, ok := changed["Prompts"]; !ok || v.Value() != int32(2) {
+		t.Fatalf("Prompts = %v (present=%v), want int32 2", v, ok)
+	}
+	for _, unchanged := range []string{"Phase", "Hold", "PhaseEndsAt", "Tier", "SessionActive"} {
+		if _, ok := changed[unchanged]; ok {
+			t.Errorf("%s did not change but was republished with the prompt", unchanged)
+		}
+	}
+}
+
+// specs/daemon-control, "Hold Publication", Scenario "Lifting a hold": one
+// signal carries Hold = none and a live PhaseEndsAt of lift instant + the
+// frozen remainder.
+func TestLiftingAHoldRepublishesALiveDeadline(t *testing.T) {
+	svc, conn, clock, tier := heldService(t)
+	tier.t = session.TierT2
+	clock.Advance(testDurations().Focus)
+	if err := svc.Tick(); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	signals := watchSignals(t, conn)
+
+	tier.t = session.TierT0
+	clock.Advance(5 * time.Second)
+	if err := svc.Tick(); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+
+	changed := nextChanged(t, signals)
+	if v, ok := changed["Hold"]; !ok || v.Value() != "none" {
+		t.Errorf("Hold = %v (present=%v), want none", v, ok)
+	}
+	want := clock.Now().Unix() + int64(testDurations().Break.Seconds())
+	if v, ok := changed["PhaseEndsAt"]; !ok || v.Value() != want {
+		t.Errorf("PhaseEndsAt = %v (present=%v), want %d", v, ok, want)
+	}
+	if n := countFor(signals, 300*time.Millisecond); n != 0 {
+		t.Fatalf("%d extra signals on the lift, want exactly 1", n)
+	}
+}
+
+// specs/daemon-control, Requirement "Control Surface", Scenario "Hold is
+// published from the first connection".
+func TestHoldIsPublishedFromTheFirstConnection(t *testing.T) {
+	_, conn := newTestService(t, session.NewFakeClock(time.Date(2026, 9, 14, 9, 0, 0, 0, time.UTC)))
+
+	if got := getProp[string](t, conn, "Hold"); got != "none" {
+		t.Fatalf("Hold = %q, want none", got)
+	}
+	if got := getProp[int32](t, conn, "Prompts"); got != 0 {
+		t.Fatalf("Prompts = %d, want 0", got)
+	}
+}

@@ -10,8 +10,11 @@ import {
     computeDisplay,
     formatMMSS,
     menuSensitivity,
+    nextSuppression,
+    promptSurface,
     shouldShowOverlay,
     DISCONNECTED,
+    PANEL_SECONDS,
     WARNING_THRESHOLD_SECONDS,
 } from './render.js';
 
@@ -217,6 +220,124 @@ check('idle during a break still counts down from PhaseEndsAt',
 
 check('paused break with nothing left shows nothing',
     shouldShowOverlay(onBreak({paused: true, phaseEndsAt: 0, remainingSeconds: 0}), NOW, false), false);
+
+// ---------------------------------------------------------------------------
+// M6: held breaks (specs/panel-indicator "Countdown Derivation", specs/
+// break-overlay "Overlay Presence", specs/camera-prompt).
+// ---------------------------------------------------------------------------
+
+// A held break publishes PhaseEndsAt as 0, exactly as Paused and Idle do.
+const held = (over = {}) => onBreak({
+    hold: 'prompt',
+    prompts: 1,
+    phaseEndsAt: 0,
+    remainingSeconds: 600,
+    ...over,
+});
+
+// specs/panel-indicator, "A held break freezes on RemainingSeconds".
+check('held break reads RemainingSeconds, not PhaseEndsAt',
+    computeDisplay(held(), NOW),
+    {dimmed: false, label: '10:00', warning: false});
+
+check('held label does not advance with time',
+    computeDisplay(held(), NOW + 600),
+    {dimmed: false, label: '10:00', warning: false});
+
+check('pill-stage hold freezes the same way',
+    computeDisplay(held({hold: 'pill', prompts: 3}), NOW + 60),
+    {dimmed: false, label: '10:00', warning: false});
+
+// specs/break-overlay, "Held break shows no overlay" and "Hold lifting
+// shows the overlay".
+check('held break shows no overlay',
+    shouldShowOverlay(held(), NOW, false), false);
+
+check('pill-stage hold shows no overlay',
+    shouldShowOverlay(held({hold: 'pill'}), NOW, false), false);
+
+check('a lifted hold shows the overlay while the break runs',
+    shouldShowOverlay(onBreak({hold: 'none', prompts: 2}), NOW, false), true);
+
+// specs/camera-prompt, "Corner Panel": 15s from the prompt, then gone.
+const SHOWN = NOW + 1;
+const UNTIL = SHOWN + PANEL_SECONDS;
+
+check('PANEL_SECONDS is 15', PANEL_SECONDS, 15);
+
+check('panel is shown before 15s',
+    promptSurface(held(), UNTIL, UNTIL - 1), 'panel');
+
+check('panel is gone at exactly 15s',
+    promptSurface(held(), UNTIL, UNTIL), null);
+
+check('panel is gone after 15s',
+    promptSurface(held(), UNTIL, UNTIL + 60), null);
+
+check('no panel before any prompt was seen',
+    promptSurface(held(), 0, NOW), null);
+
+// specs/camera-prompt, "Pill".
+check('pill shows for the pill stage',
+    promptSurface(held({hold: 'pill', prompts: 3}), 0, NOW), 'pill');
+
+check('pill stays however long it has been shown',
+    promptSurface(held({hold: 'pill', prompts: 3}), UNTIL, UNTIL + 3600), 'pill');
+
+check('no surface when the hold is none',
+    promptSurface(onBreak({hold: 'none'}), UNTIL, UNTIL - 1), null);
+
+check('no surface when the hold field is absent (older daemon)',
+    promptSurface(onBreak(), UNTIL, UNTIL - 1), null);
+
+// specs/camera-prompt, "Prompt Surface Teardown": neither outlives its cause.
+check('no surface when the daemon is unavailable',
+    promptSurface(held({available: false}), UNTIL, UNTIL - 1), null);
+
+check('no surface when disconnected',
+    promptSurface(DISCONNECTED, UNTIL, UNTIL - 1), null);
+
+check('no pill when the daemon is unavailable',
+    promptSurface(held({hold: 'pill', available: false}), 0, NOW), null);
+
+check('no surface when no session is active',
+    promptSurface(held({sessionActive: false}), UNTIL, UNTIL - 1), null);
+
+check('no pill when no session is active',
+    promptSurface(held({hold: 'pill', sessionActive: false}), 0, NOW), null);
+
+// The render tick stops while paused, so a panel could never reach its 15s
+// and would stay up for as long as the pause lasts. Hidden instead.
+check('no panel while paused',
+    promptSurface(held({paused: true}), UNTIL, UNTIL - 1), null);
+
+check('DISCONNECTED carries the hold fields',
+    [DISCONNECTED.hold, DISCONNECTED.prompts], ['none', 0]);
+
+// Fullscreen suppression is decided when a break starts RUNNING, not when it
+// is merely owed (specs/break-overlay, "Fullscreen Suppression" and
+// "Overlay Presence": a lifted hold is when the break begins). A held break
+// entered during a fullscreen call must not leave the later, running break
+// suppressed once the call has ended.
+const RUN = {available: true, sessionActive: true, phase: 'break', hold: 'none'};
+const HELD = {...RUN, hold: 'prompt'};
+const FOCUS = {...RUN, phase: 'focus'};
+
+check('running break edge decides from fullscreen',
+    nextSuppression({wasRunning: false, suppressed: false}, RUN, true),
+    {wasRunning: true, suppressed: true});
+check('a held break is not the edge and is never suppressed',
+    nextSuppression({wasRunning: false, suppressed: false}, HELD, true),
+    {wasRunning: false, suppressed: false});
+check('lifting a hold decides afresh: call ended, not fullscreen',
+    nextSuppression({wasRunning: false, suppressed: false}, RUN, false),
+    {wasRunning: true, suppressed: false});
+check('mid-break the decision is kept even if fullscreen changes',
+    nextSuppression({wasRunning: true, suppressed: true}, RUN, false),
+    {wasRunning: true, suppressed: true});
+check('leaving the break clears suppression',
+    nextSuppression({wasRunning: true, suppressed: true}, FOCUS, false),
+    {wasRunning: false, suppressed: false});
 
 if (failures > 0) {
     print(`\n${failures} check(s) failed`);

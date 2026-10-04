@@ -17,8 +17,8 @@ const (
 
 // Tier describes what other people can currently see (T0-T3, see
 // specs/session-timer). It is sampled live each tick and never persisted.
-// The only rule in Apply that branches on it is T3, which withholds the
-// break; T1 and T2 are published but behave as T0.
+// Apply branches on it twice: T3 withholds the break, and T2 holds it
+// (specs/session-timer, "Tier Gating"); T1 is published but behaves as T0.
 type Tier string
 
 const (
@@ -26,6 +26,30 @@ const (
 	TierT1 Tier = "T1" // listening only
 	TierT2 Tier = "T2" // on camera
 	TierT3 Tier = "T3" // presenting
+)
+
+// HoldStage says whether a break is being held back because the user is on
+// camera (specs/session-timer, "Tier Gating"; design D1). The values map 1:1
+// onto the D-Bus Hold property, so publishing needs no translation. The zero
+// value "" is treated as HoldNone everywhere, so a State built without the
+// field is simply "not held".
+type HoldStage string
+
+const (
+	HoldNone   HoldStage = "none"   // the break is not held
+	HoldPrompt HoldStage = "prompt" // held; the user is being asked
+	HoldPill   HoldStage = "pill"   // held past the prompt cap; a quiet reminder
+)
+
+// Policy constants for a held break (design D2). They live here rather than
+// in Durations so neither the config file nor the store record carries them;
+// configuring them waits for config hot reload.
+const (
+	// PromptRetry is how much held, unpaused time passes between prompts.
+	PromptRetry = 5 * time.Minute
+	// PromptCap is the most prompts shown for one break; after the last one
+	// and a further PromptRetry the hold becomes a pill.
+	PromptCap = 3
 )
 
 // Durations holds the configured phase and idle thresholds. Populated from
@@ -85,8 +109,27 @@ type State struct {
 
 	Tier Tier
 
+	// Hold, Prompts and SincePrompt describe a break that is owed but not
+	// running because the user is on camera (specs/session-timer, "Tier
+	// Gating"; design D1). A held break is Phase == PhaseBreak, so skip, T3
+	// and the menu keep working unchanged. ElapsedInPhase is frozen while
+	// held, the same frozen interval as Paused and Idle, so the whole
+	// remainder is still owed when the hold lifts.
+	Hold HoldStage
+	// Prompts counts the prompts shown for the current break. It is cleared
+	// only when the break ends or is credited (release), never when a hold
+	// lifts, so a flapping camera cannot escape PromptCap.
+	Prompts int
+	// SincePrompt is held, unpaused time since the last prompt: the retry
+	// clock. It is zero outside a hold.
+	SincePrompt time.Duration
+
 	Durations Durations
 }
+
+// Held reports whether the break is currently held. It is false for the
+// zero HoldStage, so old states and fresh States are "not held".
+func (s State) Held() bool { return s.Hold == HoldPrompt || s.Hold == HoldPill }
 
 // Effect is something Apply wants performed outside the domain: persist
 // state, or notify a D-Bus client. Apply never performs effects itself.

@@ -17,8 +17,12 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
-import {computeDisplay, menuSensitivity, shouldShowOverlay, DISCONNECTED} from './render.js';
+import {
+    computeDisplay, menuSensitivity, nextSuppression, promptSurface,
+    shouldShowOverlay, DISCONNECTED, PANEL_SECONDS,
+} from './render.js';
 import {OverlayController} from './overlay.js';
+import {PromptController} from './prompt.js';
 
 const BUS_NAME = 'dev.ian.Cadence';
 const OBJECT_PATH = '/dev/ian/Cadence';
@@ -38,6 +42,8 @@ const IFACE_XML = `
     <property name="Paused" type="b" access="read"/>
     <property name="Tier" type="s" access="read"/>
     <property name="Idle" type="b" access="read"/>
+    <property name="Hold" type="s" access="read"/>
+    <property name="Prompts" type="i" access="read"/>
   </interface>
 </node>`;
 
@@ -129,6 +135,9 @@ class CadenceClient {
             paused: !!p.Paused,
             tier: p.Tier ?? 'T0',
             idle: !!p.Idle,
+            // Absent on an older daemon, which is M5 behavior: never held.
+            hold: p.Hold ?? 'none',
+            prompts: Number(p.Prompts ?? 0),
         };
         this._onChanged();
     }
@@ -198,9 +207,12 @@ export default class CadenceExtension extends Extension {
         this._schemeId = 0;
         this._monitorsId = 0;
         this._suppressed = false;
-        this._wasBreak = false;
+        this._wasRunningBreak = false;
+        this._lastPrompts = 0;
+        this._panelUntil = 0;
 
         this._overlay = new OverlayController(() => this._client?.call('SkipBreak'));
+        this._prompt = new PromptController(() => this._client?.call('SkipBreak'));
 
         this._indicator = new CadenceIndicator(key => this._onAction(key));
         Main.panel.addToStatusArea(this.uuid, this._indicator);
@@ -222,6 +234,15 @@ export default class CadenceExtension extends Extension {
         // so it must come down even if a later teardown step throws.
         this._overlay?.destroy();
         this._overlay = null;
+
+        // The panel and the pill go next, ahead of the client: like the
+        // overlay they are on screen, and neither may outlive the extension.
+        // There is no panel timeout to cancel (its 15 seconds are derived from
+        // _panelUntil by the render tick), so stopping the tick below is the
+        // whole cancellation.
+        this._prompt?.destroy();
+        this._prompt = null;
+        this._panelUntil = 0;
 
         this._stopTick();
 
@@ -256,19 +277,29 @@ export default class CadenceExtension extends Extension {
     _onMonitorsChanged() {
         if (this._overlay?.visible)
             this._overlay.show(Main.layoutManager.primaryMonitor);
+        this._prompt?.reposition(Main.layoutManager.primaryMonitor);
     }
 
     _onStateChanged() {
         const s = this._client.state;
 
-        // Suppression is decided once, at the break edge, so it cannot flicker
-        // as fullscreen toggles (specs/break-overlay, Fullscreen Suppression).
-        const isBreak = s.available && s.sessionActive && s.phase === 'break';
-        if (isBreak && !this._wasBreak)
-            this._suppressed = Main.layoutManager.primaryMonitor.inFullscreen;
-        else if (!isBreak)
-            this._suppressed = false;
-        this._wasBreak = isBreak;
+        // Suppression is decided once, when a break starts running, which for
+        // a held break is the moment the hold lifts (render.js,
+        // nextSuppression).
+        const next = nextSuppression(
+            {wasRunning: this._wasRunningBreak, suppressed: this._suppressed},
+            s, Main.layoutManager.primaryMonitor.inFullscreen);
+        this._wasRunningBreak = next.wasRunning;
+        this._suppressed = next.suppressed;
+
+        // A new prompt arms the panel for PANEL_SECONDS (specs/camera-prompt,
+        // "Corner Panel"). Prompts rises once per prompt, even while Hold
+        // stays 'prompt', so it is the signal; the count is cleared when the
+        // break ends, which re-arms the next break's first prompt.
+        if (s.available && s.hold === 'prompt' && s.prompts > this._lastPrompts)
+            this._panelUntil = Math.floor(Date.now() / 1000) + PANEL_SECONDS;
+        this._lastPrompts = s.available ? s.prompts : 0;
+
         if (s.available && s.sessionActive && !s.paused)
             this._startTick();
         else
@@ -308,6 +339,19 @@ export default class CadenceExtension extends Extension {
             this._overlay?.setRemaining(display.label);
         } else {
             this._overlay?.hide();
+        }
+
+        // Mutually exclusive with the overlay: shouldShowOverlay is false for
+        // any held break, and promptSurface is null for any other.
+        switch (promptSurface(state, this._panelUntil, now)) {
+        case 'panel':
+            this._prompt?.showPanel(Main.layoutManager.primaryMonitor);
+            break;
+        case 'pill':
+            this._prompt?.showPill(Main.layoutManager.primaryMonitor);
+            break;
+        default:
+            this._prompt?.hide();
         }
     }
 }

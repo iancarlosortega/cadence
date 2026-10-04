@@ -98,6 +98,8 @@ func newService(conn *dbus.Conn, busName string, initial session.State, store se
 			"Paused":           {Value: initial.Paused, Writable: false, Emit: prop.EmitFalse},
 			"Tier":             {Value: string(initial.Tier), Writable: false, Emit: prop.EmitFalse},
 			"Idle":             {Value: initial.Idle, Writable: false, Emit: prop.EmitFalse},
+			"Hold":             {Value: holdString(initial), Writable: false, Emit: prop.EmitFalse},
+			"Prompts":          {Value: int32(initial.Prompts), Writable: false, Emit: prop.EmitFalse},
 		},
 	}
 	props, err := prop.Export(conn, ObjectPath, propsMap)
@@ -223,6 +225,16 @@ func (s *Service) apply(ev session.Event) *dbus.Error {
 	return nil
 }
 
+// holdString maps the domain's hold stage onto the published Hold property.
+// The stages already are the wire values; only the zero value needs
+// normalising, so a State built without the field publishes "none".
+func holdString(s session.State) string {
+	if s.Hold == "" {
+		return string(session.HoldNone)
+	}
+	return string(s.Hold)
+}
+
 // publish writes the current state's public fields into the exported
 // properties and announces the ones that changed as a single
 // PropertiesChanged.
@@ -262,7 +274,11 @@ func (s *Service) publish() (err error) {
 	// "Idle Publication"). Idle needs no PausedRemaining equivalent —
 	// ElapsedInPhase is frozen while the window is open, so Remaining()
 	// is already constant throughout it.
-	frozen := s.state.Paused || s.state.Idle
+	//
+	// A held break is the third (specs/daemon-control, "Hold Publication";
+	// design D7): elapsed is frozen while the user is on camera, so Remaining()
+	// is the break's remainder at the hold and no deadline can stay true.
+	frozen := s.state.Paused || s.state.Idle || s.state.Held()
 
 	// RemainingSeconds and PhaseEndsAt are derived from one truncated
 	// integer on one integer-second clock, never from a float now. A client
@@ -286,6 +302,11 @@ func (s *Service) publish() (err error) {
 		"Paused":           dbus.MakeVariant(s.state.Paused),
 		"Tier":             dbus.MakeVariant(string(s.state.Tier)),
 		"Idle":             dbus.MakeVariant(s.state.Idle),
+		"Hold":             dbus.MakeVariant(holdString(s.state)),
+		// int32 on the wire ('i'), matching the extension's interface XML.
+		// It changes exactly once per prompt, so a client sees each new
+		// prompt as a change even while Hold stays "prompt".
+		"Prompts": dbus.MakeVariant(int32(s.state.Prompts)),
 	}
 
 	changed := make(map[string]dbus.Variant, len(desired))

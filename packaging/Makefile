@@ -30,6 +30,7 @@ install-extension:
 	install -m 644 $(ROOT)/extension/extension.js    $(EXTDIR)/extension.js
 	install -m 644 $(ROOT)/extension/render.js       $(EXTDIR)/render.js
 	install -m 644 $(ROOT)/extension/overlay.js      $(EXTDIR)/overlay.js
+	install -m 644 $(ROOT)/extension/prompt.js       $(EXTDIR)/prompt.js
 	install -m 644 $(ROOT)/extension/stylesheet.css  $(EXTDIR)/stylesheet.css
 
 uninstall:

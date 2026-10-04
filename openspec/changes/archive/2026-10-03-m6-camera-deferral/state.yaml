@@ -1,0 +1,92 @@
+change: m6-camera-deferral
+project: cadence
+created: 2026-10-03
+artifact_store: hybrid
+execution_mode: auto
+delivery_strategy: exception-ok
+chain_strategy: null
+delivery_note: >-
+  Preflight collected 2026-10-03: automatic pace, both artifact stores. The user is the only
+  developer and commits directly to main, so size:exception applies.
+
+summary: >-
+  Give T2 (on camera) its own break policy: hold the break instead of showing the full-screen
+  overlay, show a small corner panel, retry every 5 minutes up to a cap, then a persistent pill.
+
+phases:
+  explore:
+    state: done
+    artifact: openspec/changes/m6-camera-deferral/exploration.md
+  research:
+    state: skipped
+    reason: P4 = A. M3 verified the Shell APIs; M5 measured the camera signal.
+  proposal:
+    state: done
+    artifact: openspec/changes/m6-camera-deferral/proposal.md
+    capabilities_modified: [session-timer, daemon-control, session-persistence, break-overlay, panel-indicator]
+    capabilities_new: [camera-prompt]
+    success_criteria: 8
+  specs:
+    state: done
+    artifact: openspec/changes/m6-camera-deferral/specs/
+    requirements: 9
+    scenarios: 45
+  design:
+    state: done
+    artifact: openspec/changes/m6-camera-deferral/design.md
+    decisions: 9
+  tasks:
+    state: done
+    artifact: openspec/changes/m6-camera-deferral/tasks.md
+    phases: 9
+    review_forecast:
+      estimated_changed_lines: "~1000"
+      budget_risk: High
+      chained_prs_recommended: false
+      decision_needed_before_apply: false
+      guard: exception-ok, user commits directly to main
+  apply:
+    state: done
+    artifact: openspec/changes/m6-camera-deferral/apply-progress.md
+    changed_lines: 1174
+    forecast_accuracy: "~1000 forecast, 1174 actual: 17% over, the closest yet."
+  verify:
+    state: done
+    artifact: openspec/changes/m6-camera-deferral/verify-report.md
+    verdict: pass_with_warnings
+    requirements: 9/9
+    scenarios: 45/45
+    blockers: 0
+    warnings: 4
+    live_checks: 8/8 passed, none waived
+  archive:
+    state: done
+    artifact: openspec/changes/m6-camera-deferral/archive-report.md
+    date: 2026-10-03
+
+product_decisions: confirmed
+
+resolved_product_decisions:
+  - id: P1
+    question: What happens when the camera turns off while a break is owed.
+    resolved: 2026-10-03
+    decision: A
+    label: Break starts right away
+  - id: P2
+    question: What the corner panel offers.
+    resolved: 2026-10-03
+    decision: A
+    label: Message plus Skip
+  - id: P3
+    question: What happens after the retry cap.
+    resolved: 2026-10-03
+    decision: A
+    label: Pill until the camera turns off or the break is skipped
+  - id: P4
+    question: Run a research lane before design.
+    resolved: 2026-10-03
+    decision: A
+    label: No research
+
+notes:
+  - SDD sub-agent dispatch is refused in this runtime, so phases run inline as in M1-M5.

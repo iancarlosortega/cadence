@@ -68,7 +68,7 @@ func Apply(s State, e Event, now time.Time) (State, []Effect) {
 		if !s.Active || s.Phase != PhaseBreak {
 			return s, nil
 		}
-		ns := s
+		ns := release(s) // a held break is released with its count (design D5)
 		ns.Phase = PhaseFocus
 		ns.ElapsedInPhase = 0
 		ns.Paused = false
@@ -125,6 +125,7 @@ func applyTick(s State, ev EventTick, now time.Time) (State, []Effect) {
 	// share. It reads the tick's tier, not the stored one, so there is no
 	// one-tick lag.
 	case s.Phase == PhaseBreak && ev.Tier == TierT3:
+		ns = release(ns) // a held break ends here too (design D5)
 		ns.Phase = PhaseFocus
 		ns.ElapsedInPhase = 0
 		ns.LastObserved = now
@@ -143,6 +144,62 @@ func applyTick(s State, ev EventTick, now time.Time) (State, []Effect) {
 		credited.Idle = true
 		credited.IdleCredited = true
 		return credited, effects
+
+	// Lift (specs/session-timer, "Tier Gating": "The camera turning off
+	// starts the break"; design D4 case 3). It sits after idle credit so an
+	// absence is credited like any other, and before the re-hold and retry
+	// cases so a hold never survives a tier below T2. The held gap is not
+	// charged: the break resumes from this instant with the remainder it was
+	// held at. The prompt count is kept so a flapping camera cannot escape
+	// the cap (design D3).
+	case s.Phase == PhaseBreak && s.Held() && ev.Tier != TierT2:
+		ns.Hold = HoldNone
+		ns.SincePrompt = 0
+		ns.LastObserved = now
+		return ns, []Effect{
+			EffectPersist{Reason: "hold lifted"},
+			EffectNotify{Reason: "hold lifted"},
+		}
+
+	// Re-hold: a break already running when the camera turns on becomes held
+	// with its elapsed time intact ("The camera turning on mid-break holds
+	// it"; design D4 case 4). hold() resumes the prompt count rather than
+	// resetting it, so re-entry at the cap goes straight to the pill.
+	case s.Phase == PhaseBreak && !s.Held() && ev.Tier == TierT2:
+		ns = hold(ns)
+		ns.LastObserved = now
+		return ns, []Effect{
+			EffectPersist{Reason: "break held"},
+			EffectNotify{Reason: "break held"},
+		}
+
+	// Retry clock (design D4 case 5). Elapsed does not advance; only the
+	// time since the last prompt does. Ticks between prompts emit nothing
+	// (specs/daemon-control, "Hold Publication": the ticks between prompts
+	// must not emit), so only the edges below return effects. Paused ticks
+	// never reach here, which freezes the clock for free (design D6).
+	case s.Phase == PhaseBreak && s.Held():
+		ns.LastObserved = now
+		if s.Hold == HoldPill {
+			return ns, nil // nothing further happens past the cap
+		}
+		ns.SincePrompt = s.SincePrompt + max(now.Sub(s.LastObserved), 0)
+		if ns.SincePrompt < PromptRetry {
+			return ns, nil
+		}
+		ns.SincePrompt = 0
+		if ns.Prompts < PromptCap {
+			ns.Prompts++
+			return ns, []Effect{
+				EffectPersist{Reason: "break prompt"},
+				EffectNotify{Reason: "break prompt"},
+			}
+		}
+		ns.Hold = HoldPill
+		return ns, []Effect{
+			EffectPersist{Reason: "hold became pill"},
+			EffectNotify{Reason: "hold became pill"},
+		}
 
 	// Focus only. A break is time away from the desk by design, so going
 	// idle during one is the user doing exactly what it asked: the break
@@ -239,7 +296,7 @@ func applySuspend(s State, ev EventSuspended) (State, []Effect) {
 // (and finished) a break by being away — idle or suspended — for at least
 // the credit threshold.
 func creditBreak(s State, at time.Time) (State, []Effect) {
-	ns := s
+	ns := release(s) // idle, suspend and downtime credit all release a hold (design D5)
 	ns.Phase = PhaseFocus
 	ns.ElapsedInPhase = 0
 	ns.Paused = false
@@ -248,19 +305,50 @@ func creditBreak(s State, at time.Time) (State, []Effect) {
 	return ns, []Effect{EffectPersist{Reason: "break credited"}, EffectNotify{Reason: "break credited"}}
 }
 
+// hold puts a break that has just started, or is already running, into a hold
+// (specs/session-timer, "Tier Gating"; design D3). It is the only place a
+// prompt is counted on entry, and it resumes the count rather than
+// resetting it: past the cap the hold starts as a pill, with no new prompt.
+// The caller has already set Phase to break.
+func hold(ns State) State {
+	if ns.Prompts < PromptCap {
+		ns.Prompts++
+		ns.Hold = HoldPrompt
+	} else {
+		ns.Hold = HoldPill
+	}
+	ns.SincePrompt = 0
+	return ns
+}
+
+// release clears every hold field. It is the one place that ends a hold for
+// good, called from every path that ends or credits a break (design D5):
+// creditBreak, skip, T3, and a break that completes normally. Stopping a
+// session builds a fresh State and so releases implicitly.
+func release(ns State) State {
+	ns.Hold = HoldNone
+	ns.Prompts = 0
+	ns.SincePrompt = 0
+	return ns
+}
+
 // transitionPhase flips focus<->break once the current phase's duration is
 // exhausted through active ticking. Tier gating (specs/session-timer,
-// "Tier Gating") is consulted here: only T3 (presenting) withholds the
-// break, and the phase stays focus with a fresh block. T1 and T2 start it
-// like T0 (design D5; product decisions P3/P4): being heard or seen is not a
-// reason to skip a break the user needs.
+// "Tier Gating") is consulted here: T3 (presenting) withholds the break and
+// the phase stays focus with a fresh block; T2 (on camera) starts the break
+// held, so the user is asked rather than interrupted (design D3); T0 and T1
+// start it normally.
 func transitionPhase(s State, now time.Time) (State, []Effect) {
 	ns := s
 	if s.Phase == PhaseFocus {
 		if s.Tier != TierT3 {
 			ns.Phase = PhaseBreak
+			if s.Tier == TierT2 {
+				ns = hold(ns)
+			}
 		}
 	} else {
+		ns = release(ns) // a normal completion, possibly after a lift (design D5)
 		ns.Phase = PhaseFocus
 	}
 	ns.ElapsedInPhase = 0

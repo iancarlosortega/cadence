@@ -28,6 +28,13 @@ type record struct {
 	BreakMinutes    int           `json:"break_minutes"`
 	IdlePauseMin    int           `json:"idle_pause_minutes"`
 	IdleCreditMin   int           `json:"idle_credit_minutes"`
+
+	// Hold state (specs/session-persistence, "Durable State"; design D8). A
+	// file written before M6 lacks these keys and decodes to "", 0, 0, which
+	// Load maps to "not held".
+	Hold        session.HoldStage `json:"hold"`
+	Prompts     int               `json:"prompts"`
+	SincePrompt time.Duration     `json:"since_prompt_ns"`
 }
 
 // FileStore implements session.Store as a single JSON file, written by
@@ -77,12 +84,25 @@ func (fs *FileStore) Load() (session.State, bool, error) {
 		Paused:          r.Paused,
 		PausedRemaining: r.PausedRemaining,
 		LastObserved:    r.LastObserved,
+		Hold:            r.Hold,
+		Prompts:         r.Prompts,
+		SincePrompt:     r.SincePrompt,
 		Durations: session.Durations{
 			Focus:      time.Duration(r.FocusMinutes) * time.Minute,
 			Break:      time.Duration(r.BreakMinutes) * time.Minute,
 			IdlePause:  time.Duration(r.IdlePauseMin) * time.Minute,
 			IdleCredit: time.Duration(r.IdleCreditMin) * time.Minute,
 		},
+	}
+	// An empty hold is an old file, or one written outside a hold: either
+	// way the break is not held (design D8).
+	// Anything other than the two held stages, including a hand-edited
+	// value, loads as not held, so the published Hold always agrees with
+	// State.Held().
+	if s.Hold != session.HoldPrompt && s.Hold != session.HoldPill {
+		s.Hold = session.HoldNone
+		s.Prompts = 0
+		s.SincePrompt = 0
 	}
 	// Tier is sampled live, never restored (design D7): a stored T3 would be
 	// wrong until the first tick, and nothing consumes a stored one.
@@ -106,6 +126,9 @@ func (fs *FileStore) Save(s session.State) error {
 		Paused:          s.Paused,
 		PausedRemaining: s.PausedRemaining,
 		LastObserved:    s.LastObserved,
+		Hold:            s.Hold,
+		Prompts:         s.Prompts,
+		SincePrompt:     s.SincePrompt,
 		FocusMinutes:    int(s.Durations.Focus.Minutes()),
 		BreakMinutes:    int(s.Durations.Break.Minutes()),
 		IdlePauseMin:    int(s.Durations.IdlePause.Minutes()),

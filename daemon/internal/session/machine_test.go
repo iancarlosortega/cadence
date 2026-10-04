@@ -489,24 +489,23 @@ func hasPersist(effects []Effect) bool {
 	return false
 }
 
-// specs/session-timer, Requirement "Tier Gating", Scenarios "T1 starts
-// break" and "T2 starts break". Only a screen share (T3) withholds the
-// break; listening or being on camera does not (design D5, P3/P4).
-func TestT1AndT2StartBreak(t *testing.T) {
-	for _, tier := range []Tier{TierT1, TierT2} {
-		t.Run(string(tier), func(t *testing.T) {
-			now := time.Date(2026, 9, 14, 9, 0, 0, 0, time.UTC)
-			s := startedFocus(now, testDurations().Focus)
+// specs/session-timer, Requirement "Tier Gating", Scenario "T1 starts
+// break". Listening is not seen, so it behaves as T0. T2 no longer starts a
+// break: it holds it (M6; see the hold tests below).
+func TestT1StartsBreak(t *testing.T) {
+	now := time.Date(2026, 9, 14, 9, 0, 0, 0, time.UTC)
+	s := startedFocus(now, testDurations().Focus)
 
-			next, effects := Apply(s, EventTick{Tier: tier}, now.Add(time.Second))
+	next, effects := Apply(s, EventTick{Tier: TierT1}, now.Add(time.Second))
 
-			if next.Phase != PhaseBreak {
-				t.Fatalf("phase = %s, want break under tier %s", next.Phase, tier)
-			}
-			if !hasNotify(effects) {
-				t.Fatal("want EffectNotify on the phase transition")
-			}
-		})
+	if next.Phase != PhaseBreak {
+		t.Fatalf("phase = %s, want break under tier T1", next.Phase)
+	}
+	if next.Held() {
+		t.Fatal("T1 must start the break normally, not held")
+	}
+	if !hasNotify(effects) {
+		t.Fatal("want EffectNotify on the phase transition")
 	}
 }
 
@@ -609,5 +608,285 @@ func TestUnchangedTierEmitsNothing(t *testing.T) {
 
 	if len(effects) != 0 {
 		t.Fatalf("want no effects for an unchanged tier, got %v", effects)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// M6: held breaks (specs/session-timer, "Tier Gating"; design D1-D6).
+// ---------------------------------------------------------------------------
+
+var holdT0 = time.Date(2026, 9, 14, 9, 0, 0, 0, time.UTC)
+
+// heldBreak returns a state whose break just became held under T2 at holdT0
+// (first prompt shown), reached through the real transition.
+func heldBreak(t *testing.T) State {
+	t.Helper()
+	s := startedFocus(holdT0.Add(-time.Second), testDurations().Focus)
+	s, _ = Apply(s, EventTick{Tier: TierT2}, holdT0)
+	if s.Phase != PhaseBreak || s.Hold != HoldPrompt || s.Prompts != 1 {
+		t.Fatalf("setup: phase=%s hold=%q prompts=%d, want a held break with 1 prompt", s.Phase, s.Hold, s.Prompts)
+	}
+	return s
+}
+
+// runTicks feeds 5s ticks at tier from `from` (exclusive) for d and returns
+// the final state plus every effect emitted along the way, in order.
+func runTicks(s State, tier Tier, from time.Time, d time.Duration) (State, []Effect) {
+	var all []Effect
+	for at := from.Add(5 * time.Second); !at.After(from.Add(d)); at = at.Add(5 * time.Second) {
+		var effects []Effect
+		s, effects = Apply(s, EventTick{Tier: tier}, at)
+		all = append(all, effects...)
+	}
+	return s, all
+}
+
+// specs/session-timer, "Tier Gating", Scenario "T2 holds the break".
+func TestT2HoldsTheBreak(t *testing.T) {
+	s := heldBreak(t)
+
+	if s.ElapsedInPhase != 0 {
+		t.Fatalf("elapsed = %s, want 0", s.ElapsedInPhase)
+	}
+}
+
+// specs/session-timer, "Tier Gating", Scenario "A held break does not
+// advance": 4 minutes of T2 leaves elapsed at 0 and prompts at 1.
+func TestAHeldBreakDoesNotAdvance(t *testing.T) {
+	s := heldBreak(t)
+
+	s, _ = runTicks(s, TierT2, holdT0, 4*time.Minute)
+
+	if s.ElapsedInPhase != 0 {
+		t.Fatalf("elapsed = %s, want 0 while held", s.ElapsedInPhase)
+	}
+	if s.Prompts != 1 {
+		t.Fatalf("prompts = %d, want 1: no further prompt inside the retry interval", s.Prompts)
+	}
+}
+
+// specs/session-timer, "Tier Gating", Scenario "Prompts repeat every 5
+// minutes up to the cap".
+func TestPromptsRepeatEveryFiveMinutesUpToTheCap(t *testing.T) {
+	s := heldBreak(t)
+
+	s, _ = runTicks(s, TierT2, holdT0, 10*time.Minute)
+
+	if s.Prompts != PromptCap {
+		t.Fatalf("prompts = %d, want %d after 10 minutes", s.Prompts, PromptCap)
+	}
+	if s.Hold != HoldPrompt {
+		t.Fatalf("hold = %q, want prompt: the pill comes only after one more interval", s.Hold)
+	}
+}
+
+// specs/session-timer, "Tier Gating", Scenario "Past the cap the hold
+// becomes a pill".
+func TestPastTheCapTheHoldBecomesAPill(t *testing.T) {
+	s := heldBreak(t)
+
+	s, _ = runTicks(s, TierT2, holdT0, 15*time.Minute)
+
+	if s.Hold != HoldPill {
+		t.Fatalf("hold = %q, want pill", s.Hold)
+	}
+	if s.Prompts != PromptCap {
+		t.Fatalf("prompts = %d, want %d: no fourth prompt", s.Prompts, PromptCap)
+	}
+	// And it stays a pill.
+	s, effects := runTicks(s, TierT2, holdT0.Add(15*time.Minute), 30*time.Minute)
+	if s.Hold != HoldPill || s.Prompts != PromptCap {
+		t.Fatalf("hold=%q prompts=%d, want a persistent pill", s.Hold, s.Prompts)
+	}
+	if len(effects) != 0 {
+		t.Fatalf("a pill emitted %d effects, want 0", len(effects))
+	}
+}
+
+// specs/session-timer, "Tier Gating", Scenario "The camera turning off
+// starts the break", from the prompt and the pill stages.
+func TestTheCameraTurningOffStartsTheBreak(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		after time.Duration
+		stage HoldStage
+	}{
+		{"prompt stage", time.Minute, HoldPrompt},
+		{"pill stage", 16 * time.Minute, HoldPill},
+	} {
+		for _, tier := range []Tier{TierT0, TierT1} {
+			t.Run(tc.name+"/"+string(tier), func(t *testing.T) {
+				s := heldBreak(t)
+				s, _ = runTicks(s, TierT2, holdT0, tc.after)
+				if s.Hold != tc.stage {
+					t.Fatalf("setup: hold = %q, want %q", s.Hold, tc.stage)
+				}
+				liftAt := holdT0.Add(tc.after + 5*time.Second)
+
+				next, effects := Apply(s, EventTick{Tier: tier}, liftAt)
+
+				if next.Held() {
+					t.Fatalf("hold = %q, want lifted", next.Hold)
+				}
+				if next.Phase != PhaseBreak || next.ElapsedInPhase != 0 {
+					t.Fatalf("phase=%s elapsed=%s, want a break at 0", next.Phase, next.ElapsedInPhase)
+				}
+				if !hasPersist(effects) || !hasNotify(effects) {
+					t.Fatalf("want Persist and Notify on the lift, got %v", effects)
+				}
+				// Elapsed advances from the lift tick, not from the held gap.
+				after, _ := Apply(next, EventTick{Tier: tier}, liftAt.Add(5*time.Second))
+				if after.ElapsedInPhase != 5*time.Second {
+					t.Fatalf("elapsed = %s, want 5s from the lift tick", after.ElapsedInPhase)
+				}
+			})
+		}
+	}
+}
+
+// specs/session-timer, "Tier Gating", Scenario "The camera turning on
+// mid-break holds it".
+func TestTheCameraTurningOnMidBreakHoldsIt(t *testing.T) {
+	s := startedFocus(holdT0, 0)
+	s.Phase = PhaseBreak
+	s.ElapsedInPhase = 4 * time.Minute
+
+	next, effects := Apply(s, EventTick{Tier: TierT2}, holdT0.Add(5*time.Second))
+
+	if next.Hold != HoldPrompt || next.Prompts != 1 {
+		t.Fatalf("hold=%q prompts=%d, want prompt/1", next.Hold, next.Prompts)
+	}
+	if next.ElapsedInPhase != 4*time.Minute {
+		t.Fatalf("elapsed = %s, want 4m kept", next.ElapsedInPhase)
+	}
+	if !hasPersist(effects) || !hasNotify(effects) {
+		t.Fatalf("want Persist and Notify, got %v", effects)
+	}
+}
+
+// specs/session-timer, "Tier Gating", Scenario "A flapping camera cannot
+// escape the cap".
+func TestAFlappingCameraCannotEscapeTheCap(t *testing.T) {
+	s := heldBreak(t)
+	s, _ = runTicks(s, TierT2, holdT0, 10*time.Minute) // three prompts
+	at := holdT0.Add(10*time.Minute + 5*time.Second)
+	s, _ = Apply(s, EventTick{Tier: TierT0}, at) // camera off: lifts
+	if s.Held() || s.Prompts != PromptCap {
+		t.Fatalf("setup: hold=%q prompts=%d, want lifted with the count kept", s.Hold, s.Prompts)
+	}
+
+	s, _ = Apply(s, EventTick{Tier: TierT2}, at.Add(5*time.Second)) // camera on again
+
+	if !s.Held() {
+		t.Fatal("want the break held again")
+	}
+	if s.Prompts != PromptCap {
+		t.Fatalf("prompts = %d, want still %d", s.Prompts, PromptCap)
+	}
+	if s.Hold != HoldPill {
+		t.Fatalf("hold = %q, want pill: re-entry at the cap shows no fourth prompt", s.Hold)
+	}
+}
+
+// specs/daemon-control, "Hold Publication": the ticks between prompts must
+// not emit, and a tick crossing the retry interval emits exactly one
+// Persist and one Notify.
+func TestQuietRetryTicksEmitNothingAndTheEdgeEmitsOnce(t *testing.T) {
+	s := heldBreak(t)
+
+	s, effects := runTicks(s, TierT2, holdT0, 5*time.Minute-5*time.Second)
+	if len(effects) != 0 {
+		t.Fatalf("quiet retry ticks emitted %d effects, want 0", len(effects))
+	}
+
+	s, effects = Apply(s, EventTick{Tier: TierT2}, holdT0.Add(5*time.Minute))
+	if s.Prompts != 2 {
+		t.Fatalf("prompts = %d, want 2 at the retry interval", s.Prompts)
+	}
+	if len(effects) != 2 || !hasPersist(effects) || !hasNotify(effects) {
+		t.Fatalf("want exactly Persist+Notify on the prompt edge, got %v", effects)
+	}
+}
+
+// specs/session-timer, "Tier Gating": a held break is released, with its
+// count cleared, on every path that ends or credits it (design D5).
+func TestEveryEndPathReleasesAHeldBreak(t *testing.T) {
+	d := testDurations()
+	paths := map[string]func(s State) State{
+		"skip": func(s State) State {
+			n, _ := Apply(s, EventSkipBreak{}, holdT0.Add(time.Minute))
+			return n
+		},
+		"T3": func(s State) State {
+			n, _ := Apply(s, EventTick{Tier: TierT3}, holdT0.Add(time.Minute))
+			return n
+		},
+		"idle credit": func(s State) State {
+			n, _ := Apply(s, EventTick{Tier: TierT2, IdleFor: d.IdleCredit}, holdT0.Add(time.Minute))
+			return n
+		},
+		"suspend credit": func(s State) State {
+			n, _ := Apply(s, EventSuspended{From: holdT0, To: holdT0.Add(d.IdleCredit)}, holdT0.Add(d.IdleCredit))
+			return n
+		},
+		"stop": func(s State) State {
+			n, _ := Apply(s, EventStopSession{}, holdT0.Add(time.Minute))
+			return n
+		},
+		"normal completion after a lift": func(s State) State {
+			s, _ = Apply(s, EventTick{Tier: TierT0}, holdT0.Add(5*time.Second))
+			s, _ = Apply(s, EventTick{Tier: TierT0}, holdT0.Add(5*time.Second+d.Break))
+			return s
+		},
+	}
+	for name, end := range paths {
+		t.Run(name, func(t *testing.T) {
+			s := heldBreak(t)
+			s, _ = runTicks(s, TierT2, holdT0, 6*time.Minute) // two prompts: a count worth clearing
+			if s.Prompts != 2 {
+				t.Fatalf("setup: prompts = %d, want 2", s.Prompts)
+			}
+
+			next := end(s)
+
+			if next.Held() || next.Hold != HoldNone && next.Hold != "" {
+				t.Fatalf("hold = %q, want none", next.Hold)
+			}
+			if next.Prompts != 0 || next.SincePrompt != 0 {
+				t.Fatalf("prompts=%d since=%s, want both cleared", next.Prompts, next.SincePrompt)
+			}
+		})
+	}
+}
+
+// specs/session-timer, "Pause Semantics" with design D6: pausing a held
+// break freezes the retry clock, and resuming keeps the stage, the count and
+// the frozen remainder.
+func TestPauseDuringAHoldFreezesTheRetryClock(t *testing.T) {
+	s := heldBreak(t)
+	s, _ = runTicks(s, TierT2, holdT0, 2*time.Minute) // 2m into the 5m retry
+	pausedAt := holdT0.Add(2 * time.Minute)
+	s, _ = Apply(s, EventPause{}, pausedAt)
+	frozen := s.PausedRemaining
+
+	// An hour passes: ticks are ignored while paused.
+	s, _ = Apply(s, EventTick{Tier: TierT2}, pausedAt.Add(time.Hour))
+	s, _ = Apply(s, EventResume{}, pausedAt.Add(time.Hour))
+
+	if s.Hold != HoldPrompt || s.Prompts != 1 {
+		t.Fatalf("hold=%q prompts=%d, want prompt/1 kept across the pause", s.Hold, s.Prompts)
+	}
+	if s.Remaining() != frozen || frozen != testDurations().Break {
+		t.Fatalf("remaining=%s frozen=%s, want the whole break kept", s.Remaining(), frozen)
+	}
+	resumed := pausedAt.Add(time.Hour)
+	// 3 more minutes finishes the 5m retry; the hour away did not count.
+	s, _ = runTicks(s, TierT2, resumed, 3*time.Minute-5*time.Second)
+	if s.Prompts != 1 {
+		t.Fatalf("prompts = %d, want 1 just before the remainder of the retry clock", s.Prompts)
+	}
+	s, _ = Apply(s, EventTick{Tier: TierT2}, resumed.Add(3*time.Minute))
+	if s.Prompts != 2 {
+		t.Fatalf("prompts = %d, want 2: the clock resumed from its frozen 2m", s.Prompts)
 	}
 }

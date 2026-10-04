@@ -53,9 +53,9 @@ on its own initiative.
 
 ### Requirement: Countdown Derivation
 
-While a session is active and neither paused nor idle, the displayed countdown MUST be recomputed on
-every tick as `PhaseEndsAt` minus the current wall-clock time, clamped at zero. The extension MUST
-NOT decrement a locally held counter.
+While a session is active and neither paused, idle nor held, the displayed countdown MUST be
+recomputed on every tick as `PhaseEndsAt` minus the current wall-clock time, clamped at zero. The
+extension MUST NOT decrement a locally held counter.
 
 While `Paused` is true, the displayed countdown MUST be taken from `RemainingSeconds` and MUST NOT
 be derived from `PhaseEndsAt`, which the daemon publishes as `0` while paused.
@@ -63,6 +63,9 @@ be derived from `PhaseEndsAt`, which the daemon publishes as `0` while paused.
 While `Idle` is true, the displayed countdown MUST be taken from `RemainingSeconds` and MUST NOT be
 derived from `PhaseEndsAt`, which the daemon publishes as `0` while idle. The extension MUST NOT
 infer idleness from its own input monitoring; `Idle` is the daemon's to declare.
+
+While `Hold` is not `none`, the displayed countdown MUST be taken from `RemainingSeconds` and MUST
+NOT be derived from `PhaseEndsAt`, which the daemon publishes as `0` while a break is held.
 
 #### Scenario: Display self-corrects after suspend
 
@@ -101,6 +104,12 @@ suspend: sub-second offset, stable across a phase transition.
 - WHEN the daemon publishes `Idle` = false and a non-zero `PhaseEndsAt`
 - THEN the countdown resumes from 12 minutes
 - AND it is again derived from `PhaseEndsAt` on every tick
+
+#### Scenario: A held break freezes on RemainingSeconds
+
+- GIVEN the daemon publishes `Phase` = `break`, `Hold` = `prompt`, `PhaseEndsAt` = 0, `RemainingSeconds` = 600
+- WHEN the indicator renders on successive ticks
+- THEN the countdown displays 10 minutes and does not advance
 
 ### Requirement: Presentation States
 
